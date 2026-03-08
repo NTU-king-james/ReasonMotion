@@ -130,14 +130,15 @@ if __name__ == '__main__':
 
     # ---------- Train ---------- #
     train(
-        model        = model,
-        config       = config['train'],
-        train_loader = train_loader,
-        valid_loader = valid_loader,
-        foldername   = output_dir,
-        load_state   = load_state,
-        text_encoder = text_encoder,
-        tb_writer    = tb_writer,
-        target_dim   = target_dim,
-        input_n      = config['data']['input_n'],
+        model                = model,
+        config               = config['train'],
+        train_loader         = train_loader,
+        valid_loader         = valid_loader,
+        valid_epoch_interval = config['train'].get('valid_epoch_interval', 10),
+        foldername           = output_dir,
+        load_state           = load_state,
+        text_encoder         = text_encoder,
+        tb_writer            = tb_writer,
+        target_dim           = target_dim,
+        input_n              = config['data']['input_n'],
     )

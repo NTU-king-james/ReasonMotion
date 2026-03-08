@@ -264,7 +264,9 @@ def train(model, config, train_loader, valid_loader=None, valid_epoch_interval=1
                         fmp_total += fmpjpe(p_part, g_part, target_dim).item()
                         n_eval_batches += 1
                     except Exception as e:
+                        import traceback
                         print(f"  [Warn] MPJPE eval failed on batch: {e}")
+                        traceback.print_exc()
 
             v_loss /= len(valid_loader)
             if n_eval_batches > 0:
