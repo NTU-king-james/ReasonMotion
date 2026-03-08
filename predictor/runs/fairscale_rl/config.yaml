@@ -47,3 +47,4 @@ train:
   batch_size_test: 16
   epochs: 50
   lr: 0.001
+  valid_epoch_interval: 1
