@@ -1,0 +1,74 @@
+
+project:
+  name: "0303_qwen_rl"
+  output_dir: "./runs/0303_qwen_rl"
+
+pretrained_ckpt: "/home/kingjames23/DePOSit_Skating_Predictor_BaseModel/ReasonMotion_SFT_GRPO_Trajectory/model_ep28_qwen_best.pth"
+
+data:
+  name: "FineFS"
+  data_dir: /home/allen/datasets/FineFS_5s/3_final
+  input_n: 30
+  max_len: 90
+  mode: rotation
+  output_n: 40
+  skip_rate: 1
+  random_face: true            # 訓練時隨機 Y 軸旋轉，消除攝影機視角偏見
+  filter_single_rotation: true # 過濾單圈跳（1A/1Lz 等雜訊樣本）
+
+diffusion:
+  beta_end: 0.5
+  beta_start: 0.0001
+  channels: 64
+  diffusion_embedding_dim: 128
+  layers: 12
+  nheads: 8
+  num_steps: 50
+  schedule: cosine
+  moe: qwen_rl
+  side_dim: 144  # timeemb(128) + featureemb(16)
+
+model:
+  target_dim: 72  
+  balance_loss: true
+  balance_loss_weight: 0.01
+  multirouter: false
+  featureemb: 16
+  is_unconditional: 0
+  text_mode: cross_attn
+  textemb: 384
+  timeemb: 128
+  use_r3: true            # Strategy C — Detached Single-Step R3
+  use_rot_loss: false
+
+rl:
+  fs_reward_ckpt: "utils/fs_reward_utils/checkpoints_goe/best_model_goe.pth"
+  lr: 1e-5                # 學習率 (大幅降低以增加稳定性，原 1e-5)
+  batch_size: 1          # Reduce for Dry Run (1)
+  num_samples_per_prompt: 8  # Reduce for Dry Run (4)
+  diffusion_steps: 50     # 採樣時使用的步數
+
+  # Visualization Params
+  #vis_val_idx: 180        # The fixed index from validation set to visualize
+  vis_target_path: "/home/allen/datasets/FineFS_5s/3_final/valid/4F/4F_0011/new_res.pk"
+  vis_top_k: 1          # Pick top 3 high reward samples
+  vis_bot_k: 1          # Pick bottom 3 low reward samples
+  viz_mode: "all"       # Options: 'inference_exploration', 'training_exploration', 'inference_stability', 'all'
+
+  sampling_std: 0.02
+  
+  # 獎勵權重 (目前策略：先求穩，再求分)
+  w_gt: 0.7             # 與 GT 的相似度
+  w_smooth: 0.1          # 平滑度獎勵
+  w_score: 0.2            # FS Score
+  w_righthand: 0        # 右手抬高
+  w_rot: 0           # 建議與 GT 權重相當或稍高
+  rot_threshold: 0.1    # 容忍 0.1 圈 (36度) 的誤差
+
+  kl_coef: 0.01          # KL 懲罰係數 (增加至 0.1 防止策略偏離)
+  kl_clip_value: 0.2
+
+  # 中間檢查點與視覺化 (防止長時間訓練無法監控)
+  save_checkpoint_every: 300    # 每 N 個 batch 保存一次 checkpoint (約 10 分鐘, 全部保留以觀察變化)
+  visualize_every: 5000          # 每 N 個 batch 執行一次視覺化 (約 10 分鐘)
+  update_ref_every_batch: 3000

@@ -1,0 +1,69 @@
+
+# H3.6M Training Config
+train:
+  epochs: 500
+  batch_size: 32
+  batch_size_test: 8
+  lr: 2.0e-4
+
+diffusion:
+  layers: 8
+  channels: 64
+  nheads: 8
+  diffusion_embedding_dim: 128
+  beta_start: 0.0001
+  beta_end: 0.5
+  num_steps: 50
+  schedule: "cosine"
+  moe: fairscale_rl
+
+model:
+  is_unconditional: 0
+  timeemb: 128
+  featureemb: 16
+  target_dim: 51            # 17 joints * 3
+  textemb: 512              # CLIP embedding dimension
+  text_encoder: "clip"      # Just a label, handled by text_injection logic
+  text_mode: "cross_attn"   # Main conditioning mechanism
+  balance_loss: True
+  balance_loss_weight: 0.01  # fairscale l_aux 未內部縮放，對齊 Switch Transformer
+  multirouter: false
+
+data:
+  dataset: "h36m"
+  data_dir: "/home/allen/datasets"
+  data_dir_h36m: "/home/allen/datasets/h3.6m" # This specific key is used in some loaders
+  input_n: 25               # 200ms observed
+  output_n: 125              # 800ms predicted
+  skip_rate: 10 # Higher skip rate to get diversity
+  split: 0
+  mode: "action_label"      # Just use action name as text
+  joints: 17
+
+text_injection:
+  # 1. CLIP Encoder (vs SBERT)
+  # 目的: 提供更豐富的語意 Embedding (512維)。CLIP 在動作理解上通常優於 SBERT，能捕捉更多細節。
+  use_clip_encoder: true
+  
+  # 2. Deep Text Projector
+  # 目的: 在 Embedding 後加入 Transformer 層，試圖提取更高階的特徵。
+  # 風險: 參數過多 (Complexity Debt)，可能導致模型忽略文字訊號 (Trivial Solution)，是近期效能退化的主因之一。
+  use_deep_text_projector: false  #這個問題最大
+
+  # 3. Late Injection
+  # 目的: 將 Cross-Attention 移至 Residual Block 的末端。
+  # 理論: 避免文字資訊在經過 Temporal/Spatial Attention 時被稀釋。
+  use_late_injection: false
+
+  # 4. Decouple Spatial-Temporal
+  # 目的: 強制運算順序為 Spatial -> Cross -> Temporal。
+  # 理論: 讓模型先理解骨架結構 (Spatial)，再融合文字，最後處理時間動態。
+  decouple_spatial_temporal: true 
+
+  # 5. Time-Aware FiLM
+  # 目的: 使用時間步 (t) 來動態調整 Attention 的 Scale/Shift。
+  # 理論: 強制模型在不同擴散階段關注不同的特徵。風險是如果初始化不佳，會破壞梯度傳遞。
+  use_time_aware_film: true
+
+# Other legacy settings
+grad_clip: 1.0

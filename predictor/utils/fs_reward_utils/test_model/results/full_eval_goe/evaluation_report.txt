@@ -1,0 +1,82 @@
+Evaluation Report
+=================
+Total Samples: 181
+Mean Absolute Error (MAE): 0.7003
+Mean Squared Error (MSE): 0.9033
+
+Top 10 Overestimated (Pred > GT):
+  1. quadruple | GT: -1.90, Pred: 2.52, Diff: +4.42
+  2. triple | GT: -3.20, Pred: -0.50, Diff: +2.70
+  3. quadruple | GT: -2.33, Pred: -0.02, Diff: +2.31
+  4. quadruple | GT: -2.39, Pred: -0.13, Diff: +2.26
+  5. triple | GT: -2.10, Pred: 0.09, Diff: +2.19
+  6. quadruple | GT: -4.85, Pred: -2.93, Diff: +1.92
+  7. quadruple | GT: -2.49, Pred: -0.60, Diff: +1.89
+  8. triple | GT: -1.14, Pred: 0.63, Diff: +1.77
+  9. triple | GT: -4.00, Pred: -2.29, Diff: +1.71
+  10. triple | GT: -0.99, Pred: 0.64, Diff: +1.63
+
+Top 10 Underestimated (Pred < GT):
+  1. quadruple | GT: 4.57, Pred: 1.34, Diff: -3.23
+  2. quadruple | GT: -0.49, Pred: -2.69, Diff: -2.20
+  3. quadruple | GT: 2.31, Pred: 0.22, Diff: -2.09
+  4. triple | GT: 1.71, Pred: -0.23, Diff: -1.94
+  5. quadruple | GT: 4.16, Pred: 2.24, Diff: -1.92
+  6. quadruple | GT: 2.04, Pred: 0.31, Diff: -1.73
+  7. triple | GT: 2.63, Pred: 0.94, Diff: -1.69
+  8. quadruple | GT: 4.02, Pred: 2.34, Diff: -1.68
+  9. triple | GT: 1.82, Pred: 0.17, Diff: -1.65
+  10. triple | GT: 3.77, Pred: 2.29, Diff: -1.48
+
+
+Full Results (Top 50 Errors):
+  1. quadruple | GT: -1.90, Pred: 2.52, Error: 4.42 (+)
+  2. quadruple | GT: 4.57, Pred: 1.34, Error: 3.23 (-)
+  3. triple | GT: -3.20, Pred: -0.50, Error: 2.70 (+)
+  4. quadruple | GT: -2.33, Pred: -0.02, Error: 2.31 (+)
+  5. quadruple | GT: -2.39, Pred: -0.13, Error: 2.26 (+)
+  6. quadruple | GT: -0.49, Pred: -2.69, Error: 2.20 (-)
+  7. triple | GT: -2.10, Pred: 0.09, Error: 2.19 (+)
+  8. quadruple | GT: 2.31, Pred: 0.22, Error: 2.09 (-)
+  9. triple | GT: 1.71, Pred: -0.23, Error: 1.94 (-)
+  10. quadruple | GT: -4.85, Pred: -2.93, Error: 1.92 (+)
+  11. quadruple | GT: 4.16, Pred: 2.24, Error: 1.92 (-)
+  12. quadruple | GT: -2.49, Pred: -0.60, Error: 1.89 (+)
+  13. triple | GT: -1.14, Pred: 0.63, Error: 1.77 (+)
+  14. quadruple | GT: 2.04, Pred: 0.31, Error: 1.73 (-)
+  15. triple | GT: -4.00, Pred: -2.29, Error: 1.71 (+)
+  16. triple | GT: 2.63, Pred: 0.94, Error: 1.69 (-)
+  17. quadruple | GT: 4.02, Pred: 2.34, Error: 1.68 (-)
+  18. triple | GT: 1.82, Pred: 0.17, Error: 1.65 (-)
+  19. triple | GT: -0.99, Pred: 0.64, Error: 1.63 (+)
+  20. quadruple | GT: -5.75, Pred: -4.15, Error: 1.60 (+)
+  21. triple | GT: 3.77, Pred: 2.29, Error: 1.48 (-)
+  22. triple | GT: 0.00, Pred: 1.41, Error: 1.41 (+)
+  23. quadruple | GT: -5.50, Pred: -4.13, Error: 1.37 (+)
+  24. triple | GT: 1.38, Pred: 0.10, Error: 1.28 (-)
+  25. triple | GT: 0.11, Pred: -1.12, Error: 1.23 (-)
+  26. triple | GT: -2.95, Pred: -1.73, Error: 1.22 (+)
+  27. triple | GT: -4.00, Pred: -2.78, Error: 1.22 (+)
+  28. quadruple | GT: 3.26, Pred: 2.06, Error: 1.20 (-)
+  29. triple | GT: 1.41, Pred: 0.25, Error: 1.16 (-)
+  30. triple | GT: -1.69, Pred: -0.55, Error: 1.14 (+)
+  31. triple | GT: 1.47, Pred: 0.36, Error: 1.11 (-)
+  32. triple | GT: 2.11, Pred: 1.01, Error: 1.10 (-)
+  33. triple | GT: -0.77, Pred: 0.32, Error: 1.09 (+)
+  34. triple | GT: 1.27, Pred: 0.19, Error: 1.08 (-)
+  35. triple | GT: -0.50, Pred: 0.58, Error: 1.08 (+)
+  36. triple | GT: 1.33, Pred: 0.27, Error: 1.06 (-)
+  37. triple | GT: 2.12, Pred: 1.07, Error: 1.05 (-)
+  38. double | GT: -1.23, Pred: -0.22, Error: 1.01 (+)
+  39. triple | GT: -1.44, Pred: -0.43, Error: 1.01 (+)
+  40. triple | GT: -0.69, Pred: 0.30, Error: 0.99 (+)
+  41. quadruple | GT: -5.50, Pred: -4.54, Error: 0.96 (+)
+  42. triple | GT: -4.00, Pred: -3.05, Error: 0.95 (+)
+  43. triple | GT: 1.52, Pred: 0.57, Error: 0.95 (-)
+  44. triple | GT: 0.63, Pred: -0.30, Error: 0.93 (-)
+  45. quadruple | GT: -3.12, Pred: -2.19, Error: 0.93 (+)
+  46. quadruple | GT: -2.04, Pred: -1.13, Error: 0.91 (+)
+  47. quadruple | GT: 0.68, Pred: -0.23, Error: 0.91 (-)
+  48. triple | GT: 1.85, Pred: 0.95, Error: 0.90 (-)
+  49. triple | GT: 1.12, Pred: 0.22, Error: 0.90 (-)
+  50. triple | GT: 0.15, Pred: 1.04, Error: 0.89 (+)

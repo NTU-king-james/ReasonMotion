@@ -1,0 +1,76 @@
+# configs/train_grpo_resume_example.yaml
+# 範例：從 0212_balance_rewards 的 Batch 3000 繼續訓練，提高 R_Rot 權重
+
+project:
+  name: "resume_from_0212_precise_rot"
+  output_dir: "./runs/resume_from_0212_precise_rot"
+
+# ===== Resume 設定 =====
+# 從已有的 RL Run 繼續訓練
+resume:
+  from_run: "./runs/0212_balance_rewards"    # 來源 Run 資料夾
+  from_epoch: 1                               # 來源 Epoch
+  from_batch: 5000                            # 從哪個 Batch 的 Checkpoint 繼續
+
+# 注意：resume 模式下，pretrained_ckpt 會被忽略
+# 模型會從 from_run/checkpoints/checkpoint_ep{from_epoch}_batch{from_batch}.pth 載入
+pretrained_ckpt: "/home/allen/Diffusion/DePOSit_Skating_Predictor_BaseModel/runs/rotation_30_40_0711-1541/checkpoints/model_ep30.pth"
+
+data:
+  name: "FineFS"
+  data_dir: "/home/allen/datasets/FineFS_5s/3_final"
+  input_n: 30
+  output_n: 40
+  mode: "rotation"
+  skip_rate: 1
+  max_len: 90
+  random_face: true            # 訓練時隨機 Y 軸旋轉，消除攝影機視角偏見
+  filter_single_rotation: true # 過濾單圈跳（1A/1Lz 等雜訊樣本）
+model:
+  target_dim: 72        # 24 joints * 3
+  timeemb: 128
+  featureemb: 16
+  textemb: 384
+  is_unconditional: 0
+  text_mode: "cross_attn"
+
+diffusion:
+  channels: 64
+  diffusion_embedding_dim: 128
+  layers: 12
+  nheads: 8
+  num_steps: 50
+  schedule: "cosine"
+  beta_start: 0.0001
+  beta_end: 0.5
+  side_dim: 144  # timeemb(128) + featureemb(16)
+
+rl:
+  fs_reward_ckpt: "utils/fs_reward_utils/checkpoints_goe/best_model_goe.pth"
+  lr: 1e-5
+  batch_size: 1
+  num_samples_per_prompt: 8
+  diffusion_steps: 50
+
+  # Visualization Params
+  vis_target_path: "/home/allen/datasets/FineFS_5s/3_final/valid/4F/4F_0011/new_res.pk"
+  vis_top_k: 1
+  vis_bot_k: 1
+  viz_mode: "all"
+
+  sampling_std: 0.02
+  
+  # ===== 新的獎勵權重 (這就是你要調整的部分) =====
+  w_gt: 0.3              # 放寬 GT 約束
+  w_smooth: 0.1           # 保持平滑度
+  w_score: 0.2             # FS Score
+  w_righthand: 0
+  w_rot: 0.4              # 大幅提高旋轉獎勵！
+  rot_threshold: 0.1
+
+  kl_coef: 0.005
+  kl_clip_value: 3
+
+  save_checkpoint_every: 500
+  visualize_every: 5000
+  update_ref_every_batch: 3000

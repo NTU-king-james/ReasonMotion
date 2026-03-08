@@ -1,0 +1,52 @@
+config: /home/allen/Diffusion/DePOSit_Skating_Predictor_BaseModel/configs/train.yaml
+data:
+  dataset: finefs
+  data_dir: /home/allen/datasets/FineFS_5s/3_final
+  input_n: 30
+  max_len: 90
+  mode: rotation
+  model_l: null
+  model_s: null
+  output_dir: runs/fairscale_rl/
+  output_n: 40
+  skip_rate: 1
+diffusion:
+  beta_end: 0.5
+  beta_start: 0.0001
+  channels: 64
+  diffusion_embedding_dim: 128
+  layers: 12
+  nheads: 8
+  num_steps: 50
+  schedule: cosine
+  moe: fairscale_rl
+model:
+  balance_loss: true
+  balance_loss_weight: 0.01
+  multirouter: false
+  featureemb: 16
+  is_unconditional: 0
+  text_encoder: sentence-transformer
+  text_mode: cross_attn
+  textemb: 384
+  timeemb: 128
+  use_r3: true            # Strategy C — Detached Single-Step R3
+  use_rot_loss: false
+train:
+  batch_size: 16
+  batch_size_test: 16
+  epochs: 50
+  lr: 0.001
+
+text_injection:
+  decouple_spatial_temporal: false
+  use_clip_encoder: false
+  use_deep_text_projector: false
+  use_late_injection: false
+  use_time_aware_film: false
+
+batch_size: 128
+nsample: 1
+# Load pretrained fairscale checkpoint — weights are 100% compatible with fairscale_rl
+pretrain_ckpt: runs/0302_fairscale/checkpoints/model_ep45.pth
+single_model: true

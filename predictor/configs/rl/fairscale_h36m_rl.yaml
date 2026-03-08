@@ -1,0 +1,69 @@
+project:
+  name: "h36m_fairscale_rl"
+  output_dir: "./runs/h36m_fairscale_rl"
+
+pretrained_ckpt: "/home/kingjames23/DePOSit_Skating_Predictor_BaseModel/runs/0304_h36m_fairscale/model.pth" # <-- 請替換為您的 H36M MoE SFT 模型
+
+data:
+  name: "h36m"
+  data_dir: /home/allen/datasets
+  input_n: 25
+  max_len: null
+  mode: h36m
+  output_n: 100
+  skip_rate: 2
+  joints: 17
+
+diffusion:
+  beta_end: 0.5
+  beta_start: 0.0001
+  channels: 64
+  diffusion_embedding_dim: 128
+  layers: 12
+  nheads: 8
+  num_steps: 50
+  schedule: cosine
+  moe: fairscale_rl
+  side_dim: 144  # timeemb(128) + featureemb(16)
+
+model:
+  target_dim: 51  
+  balance_loss: true
+  balance_loss_weight: 0.01
+  multirouter: false
+  featureemb: 16
+  is_unconditional: 0
+  text_mode: cross_attn
+  textemb: 384
+  timeemb: 128
+  use_r3: true            # Strategy C — Detached Single-Step R3
+  use_rot_loss: false
+
+rl:
+  lr: 1e-5                
+  batch_size: 1          
+  num_samples_per_prompt: 8  
+  diffusion_steps: 50     
+
+  # Visualization Params
+  vis_target_path: null
+  vis_top_k: 1          
+  vis_bot_k: 1          
+  viz_mode: "all"       
+
+  sampling_std: 0.02
+  
+  # 獎勵權重 0.7 GT + 0.3 Smooth
+  w_gt: 0.7             
+  w_smooth: 0.3          
+  w_score: 0.0            
+  w_righthand: 0.0        
+  w_rot: 0.0           
+  rot_threshold: 0.1    
+
+  kl_coef: 0.01          
+  kl_clip_value: 0.2
+
+  save_checkpoint_every: 300    
+  visualize_every: 5000          
+  update_ref_every_batch: 3000
