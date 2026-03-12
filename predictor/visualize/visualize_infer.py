@@ -8,8 +8,8 @@ import torch, imageio, matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from model import ModelMain
-from utils.finefs import expand_motion_name
+from model.model import ModelMain
+from motion_data.finefs import expand_motion_name
 from utils.text_encoder import TextEncoder
 from utils.config_util import load_config
 
@@ -18,8 +18,8 @@ example usage:
 conda activate diff_env
 
 python visualize_infer.py \
-  --run_dir "/home/allen/Diffusion/ReasonMotion_SFT_GRPO/runs/12090619_SFT_RL_FineFS" \
-  --epoch 23 \
+  --run_dir "/home/kingjames23/ReasonMotion/predictor/runs/fairscale_rl" \
+  --epoch 48 \
   --res_pk "/home/allen/datasets/FineFS_5s/3_final/test/3Lz/3Lz_0006/new_res.pk" \
   --texts "quadruple, triple, double, single"
 
@@ -122,7 +122,7 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     config_path = os.path.join(args.run_dir, "config.yaml")
     config = load_config(config_path)
-    checkpoint = os.path.join(args.run_dir, "checkpoints", f"model_epoch_{args.epoch}.pth")
+    checkpoint = os.path.join(args.run_dir, "checkpoints", f"model_ep{args.epoch}.pth")
     print(f"[Loading model from] {checkpoint}")
     model = load_model(config, device, checkpoint)
     text_encoder = TextEncoder(device=device).to(device)

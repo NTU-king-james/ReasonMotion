@@ -19,7 +19,7 @@ import os
 import torch
 import yaml
 from torch.utils.data import DataLoader
-from model import ModelMain
+from model.model import ModelMain
 from motion_data.finefs import FineFS
 
 from utils.metrics import MetricsEvaluator
