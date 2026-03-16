@@ -88,6 +88,7 @@ class diff_CSDI(nn.Module):
                     nheads=config["nheads"],
                     textemb=config["textemb"],
                     moe=config.get("moe", False),
+                    temporal_decay=config.get("temporal_decay", False),
                 )
                 for _ in range(config["layers"])
             ]
@@ -156,7 +157,7 @@ class diff_CSDI(nn.Module):
         return total_loss / count, total_fi / count
 
 class ResidualBlock(nn.Module):
-    def __init__(self, side_dim, channels, diffusion_embedding_dim, nheads, textemb=384, moe=False):
+    def __init__(self, side_dim, channels, diffusion_embedding_dim, nheads, textemb=384, moe=False, temporal_decay=False):
         super().__init__()
         self.diffusion_projection = nn.Linear(diffusion_embedding_dim, channels)
         self.cond_projection = Conv1d_with_init(side_dim, 2 * channels, 1)
@@ -211,6 +212,14 @@ class ResidualBlock(nn.Module):
       
         self.time_mask = torch.triu(torch.ones(200, 200) * float('-inf'), diagonal=1)
 
+        # --- Temporal Decay Mask (GAtFuN-inspired logistic decay) ---
+        # 透過 additive mask log(σ(β - α|i-j|)) = -softplus(α|i-j| - β)
+        # 讓 temporal attention 偏好相近幀，α 控制衰減陡度，β 控制偏移
+        self.temporal_decay = temporal_decay
+        if temporal_decay:
+            self.decay_alpha = nn.Parameter(torch.tensor(1.0))
+            self.decay_beta = nn.Parameter(torch.tensor(5.0))
+
     def forward_time(self, y, base_shape):
         B, C, K, L = base_shape
 
@@ -226,7 +235,14 @@ class ResidualBlock(nn.Module):
         # testing
         # y = y.reshape(B, C, K, L).permute(0, 3, 2, 1).reshape(B, L, K * C)
         # y = self.time_layer(y, mask=self.time_mask[:L, :L].to(y.device))
-        y = self.time_layer(y)
+        if self.temporal_decay:
+            indices = torch.arange(L, device=y.device, dtype=y.dtype)
+            dist_matrix = (indices.unsqueeze(0) - indices.unsqueeze(1)).abs()  # (L, L)
+            # additive mask: log(σ(β - α·dist)) ≡ -softplus(α·dist - β)
+            decay_mask = -F.softplus(self.decay_alpha * dist_matrix - self.decay_beta)
+            y = self.time_layer(y, mask=decay_mask)
+        else:
+            y = self.time_layer(y)
 
         # Reshape back to original (B, C, K*L)
         # (B*K, L, C) -> reshape -> (B, K, L, C) -> permute(0, 3, 1, 2) -> (B, C, K, L) -> reshape -> (B, C, K*L)

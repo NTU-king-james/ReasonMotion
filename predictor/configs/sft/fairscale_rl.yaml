@@ -7,7 +7,7 @@ data:
   mode: rotation
   model_l: null
   model_s: null
-  output_dir: runs/fairscale_rl/
+  output_dir: runs/0311_fairscale_rl_temporal/
   output_n: 40
   skip_rate: 1
 diffusion:
@@ -32,6 +32,7 @@ model:
   timeemb: 128
   use_r3: true            # Strategy C — Detached Single-Step R3
   use_rot_loss: false
+  temporal_decay: true    # Enable temporal decay in attention mechanism
 train:
   batch_size: 16
   batch_size_test: 16

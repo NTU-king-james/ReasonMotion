@@ -179,7 +179,7 @@ def train(model, config, train_loader, valid_loader=None, valid_epoch_interval=1
                 post_clip_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
                 warmup_scheduler.step()
-                decay_scheduler.step()
+                # NOTE: decay_scheduler 移至 epoch 結束時呼叫（T_max=epochs 為 epoch-level）
 
                 # --- Logging ---
                 epoch_loss += loss_main.item()
@@ -284,6 +284,9 @@ def train(model, config, train_loader, valid_loader=None, valid_epoch_interval=1
                 best_valid = v_loss
                 save_state(model, optimizer, decay_scheduler, epoch, foldername)
                 print(f"✓ new best valid {v_loss:.4f} @ epoch {epoch}")
+
+        # --- Cosine annealing LR decay (epoch-level) ---
+        decay_scheduler.step()
 
         # --- Save checkpoint every 1 epochs ---
         ck_name = os.path.join(checkpoints_dir, f"model_ep{epoch+1}.pth")
