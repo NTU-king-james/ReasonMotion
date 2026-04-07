@@ -33,13 +33,14 @@ class H36M(Dataset):
     data_dir   : str,   e.g. "/home/allen/datasets"
     input_n    : int,   長度同 FineFS
     output_n   : int
-    skip_rate  : int,   sliding window stride
+    skip_rate  : int,   sliding window stride (ignored if no_overlap=True)
     split      : int,   0=train, 1=valid, 2=test
     actions    : list[str] or None
     joints     : int,   24 / 22 / 17 / 32
     data_ratio : 0~1,   只取部分資料做快速實驗
     downsample : int,   原始序列下采樣 (預設 2)
     max_len    : int or None, 序列長度上限
+    no_overlap : bool,  若 True，每個影片只用一次 (從頭開始)；若 False，使用 sliding window
     """
     def __init__(self,
                  data_dir     : str,
@@ -51,7 +52,8 @@ class H36M(Dataset):
                  joints       : int = 17,
                  data_ratio   : float = 1,
                  downsample   : int = 2,
-                 max_len      : Optional[int] = None):
+                 max_len      : Optional[int] = None,
+                 no_overlap   : bool = False):
         super().__init__()
         assert 0 < data_ratio <= 1
         assert split in [0, 1, 2]
@@ -63,6 +65,7 @@ class H36M(Dataset):
         self.skip_rate = skip_rate
         self.downsample= downsample
         self.split     = split
+        self.no_overlap= no_overlap
 
         # ---------- 關節維度挑選 ---------- #
         if joints == 24:          # 與 FineFS 對齊 (HybrIK-24 skeleton)
@@ -84,7 +87,7 @@ class H36M(Dataset):
             self.dim_used = np.arange(96)
 
         # ---------- subjects split ---------- #
-        subs   = [[1, 6, 7, 8, 9], [11], [5]][split]
+        subs   = [[1, 5, 6, 7, 8], [11], [9, 11]][split]
         acts   = actions or ["walking", "eating", "smoking", "discussion",
                              "directions", "greeting", "phoning", "posing",
                              "purchases", "sitting", "sittingdown",
@@ -96,7 +99,8 @@ class H36M(Dataset):
         if not os.path.isdir(base_dir):
             raise FileNotFoundError(f"H36M folder not found: {base_dir}")
         print(f"[Init] H36M base: {base_dir}")
-
+        print("downsample:", downsample)
+        print("out_n:", self.out_n)
         # ----------- 讀取序列 ----------- #
         self.p3d: Dict[int, np.ndarray] = {}
         self.motion_labels: Dict[int, str] = {}
@@ -131,7 +135,10 @@ class H36M(Dataset):
                     self.motion_labels[key] = act   # ← label = action name
 
                     # ---------- sliding windows ---------- #
-                    starts = np.arange(0, xyz.shape[0] - self.seq_len + 1, skip_rate)
+                    if no_overlap:
+                        starts = [0]  # 每個影片只取開頭
+                    else:
+                        starts = np.arange(0, xyz.shape[0] - self.seq_len + 1, skip_rate)
                     self.data_idx.extend([(key, s) for s in starts])
                     key += 1
                     total_win += len(starts)

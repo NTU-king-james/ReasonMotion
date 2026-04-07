@@ -8,7 +8,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
-from utils.metrics import ampjpe, fmpjpe
+from utils.metrics import ampjpe, fmpjpe, compute_ade, compute_fde
 
 def save_training_plot(history, filename_base):
     # Plot 1: Losses
@@ -123,7 +123,8 @@ def train(model, config, train_loader, valid_loader=None, valid_epoch_interval=1
         optimizer.load_state_dict(ckpt['optimizer'])
         warmup_scheduler.last_epoch = ckpt['epoch']
         decay_scheduler.load_state_dict(ckpt['scheduler'])
-        start_epoch = ckpt['epoch'] + 1
+        start_epoch = 17
+        print(f"🔄 Resuming from epoch {start_epoch}...")
     else:
         start_epoch = 0
 
@@ -148,7 +149,7 @@ def train(model, config, train_loader, valid_loader=None, valid_epoch_interval=1
     best_valid = 1e10
     gs = 0
     history = {'epoch': [], 'train_loss': [], 'valid_loss': [], 'r_shuf': [], 'r_zero': [],
-               'ampjpe': [], 'fmpjpe': []}
+               'ampjpe': [], 'fmpjpe': [], 'ade': [], 'fde': []}
 
     for epoch in range(start_epoch, config["epochs"]):
         inner_model.use_r3 = _use_r3   # restore R3 for training
@@ -240,17 +241,18 @@ def train(model, config, train_loader, valid_loader=None, valid_epoch_interval=1
 
         # --- Validation ---
         epoch_ampjpe, epoch_fmpjpe = None, None
+        epoch_ade, epoch_fde = None, None
         if valid_loader and (epoch + 1) % valid_epoch_interval == 0:
             model.eval()
             v_loss = 0.0
-            amp_total, fmp_total, n_eval_batches = 0.0, 0.0, 0
+            amp_total, fmp_total, ade_total, fde_total, n_eval_batches = 0.0, 0.0, 0.0, 0.0, 0
             eval_model = model.module if isinstance(model, nn.DataParallel) else model
             with torch.no_grad():
                 for v_batch in valid_loader:
                     v_tok, v_mask = text_encoder(v_batch["motion_name"])
                     v_loss += model(v_batch, text_embedding=(v_tok, v_mask)).mean().item()
 
-                    # --- Compute A-MPJPE & F-MPJPE ---
+                    # --- Compute A-MPJPE, F-MPJPE, ADE & FDE ---
                     try:
                         samples, gt = eval_model.evaluate(
                             v_batch, n_samples=1, text_embedding=(v_tok, v_mask)
@@ -262,6 +264,16 @@ def train(model, config, train_loader, valid_loader=None, valid_epoch_interval=1
                         g_part = gt[..., input_n:]
                         amp_total += ampjpe(p_part, g_part, target_dim).item()
                         fmp_total += fmpjpe(p_part, g_part, target_dim).item()
+
+                        pred_np = p_part.cpu().numpy().transpose(0, 1, 3, 2)  # (B, N, T, K)
+                        gt_np = g_part.cpu().numpy().transpose(0, 1, 3, 2)    # (B, N, T, K)
+                        batch_ade = []
+                        batch_fde = []
+                        for b in range(pred_np.shape[0]):
+                            batch_ade.append(float(compute_ade(pred_np[b], gt_np[b, 0])))
+                            batch_fde.append(float(compute_fde(pred_np[b], gt_np[b, 0])))
+                        ade_total += float(np.mean(batch_ade)) if batch_ade else 0.0
+                        fde_total += float(np.mean(batch_fde)) if batch_fde else 0.0
                         n_eval_batches += 1
                     except Exception as e:
                         import traceback
@@ -272,13 +284,21 @@ def train(model, config, train_loader, valid_loader=None, valid_epoch_interval=1
             if n_eval_batches > 0:
                 epoch_ampjpe = amp_total / n_eval_batches
                 epoch_fmpjpe = fmp_total / n_eval_batches
-                print(f"  [Metrics] A-MPJPE: {epoch_ampjpe:.2f} mm | F-MPJPE: {epoch_fmpjpe:.2f} mm")
+                epoch_ade = ade_total / n_eval_batches
+                epoch_fde = fde_total / n_eval_batches
+                print(
+                    f"  [Metrics] A-MPJPE: {epoch_ampjpe:.2f} mm | F-MPJPE: {epoch_fmpjpe:.2f} mm"
+                    f" | ADE: {epoch_ade:.4f} | FDE: {epoch_fde:.4f}"
+                )
 
             if tb_writer:
                 tb_writer.add_scalar("epoch/valid_loss", v_loss, epoch)
                 if epoch_ampjpe is not None:
                     tb_writer.add_scalar("epoch/A-MPJPE", epoch_ampjpe, epoch)
                     tb_writer.add_scalar("epoch/F-MPJPE", epoch_fmpjpe, epoch)
+                if epoch_ade is not None:
+                    tb_writer.add_scalar("epoch/ADE", epoch_ade, epoch)
+                    tb_writer.add_scalar("epoch/FDE", epoch_fde, epoch)
 
             if v_loss < best_valid:
                 best_valid = v_loss
@@ -302,17 +322,19 @@ def train(model, config, train_loader, valid_loader=None, valid_epoch_interval=1
         # Valid loss (only add if we ran validation this epoch)
         # Note: v_loss is from inner scope, we strictly need to check if we ran validation
         if valid_loader and (epoch + 1) % valid_epoch_interval == 0:
-             history['valid_loss'].append(v_loss)
+            history['valid_loss'].append(v_loss)
         else:
-             history['valid_loss'].append(None)
+            history['valid_loss'].append(None)
         history['ampjpe'].append(epoch_ampjpe)
         history['fmpjpe'].append(epoch_fmpjpe)
+        history['ade'].append(epoch_ade)
+        history['fde'].append(epoch_fde)
              
         # --- Save History to CSV ---
         csv_path = os.path.join(foldername, "training_history.csv")
         file_exists = os.path.isfile(csv_path)
         with open(csv_path, mode='a', newline='') as f:
-            headers = ['epoch', 'train_loss', 'valid_loss', 'r_shuf', 'r_zero', 'A-MPJPE', 'F-MPJPE']
+            headers = ['epoch', 'train_loss', 'valid_loss', 'r_shuf', 'r_zero', 'A-MPJPE', 'F-MPJPE', 'ADE', 'FDE']
             writer = csv.DictWriter(f, fieldnames=headers)
             if not file_exists:
                 writer.writeheader()
@@ -326,10 +348,12 @@ def train(model, config, train_loader, valid_loader=None, valid_epoch_interval=1
                 'r_zero': ratio_zero,
                 'A-MPJPE': f"{epoch_ampjpe:.2f}" if epoch_ampjpe is not None else '',
                 'F-MPJPE': f"{epoch_fmpjpe:.2f}" if epoch_fmpjpe is not None else '',
+                'ADE': f"{epoch_ade:.6f}" if epoch_ade is not None else '',
+                'FDE': f"{epoch_fde:.6f}" if epoch_fde is not None else '',
             }
             writer.writerow(row)
 
         save_training_plot(history, os.path.join(foldername, "training_metrics"))
 
-        # -------- Save final model --------
-        save_state(model, optimizer, decay_scheduler, config["epochs"] - 1, foldername)
+    # -------- Save final model --------
+    save_state(model, optimizer, decay_scheduler, config["epochs"] - 1, foldername)

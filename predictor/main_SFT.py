@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 from model.model import ModelMain
 from motion_data.finefs import FineFS
-from motion_data.h36m  import H36M           # ← 新增
+from motion_data.h36m_unified import H36MUnified
 from utils.text_encoder import TextEncoder
 from utils.config_util_sft import get_config, save_config, load_resume_config, parse_args
 from train_SFT import train
@@ -35,7 +35,7 @@ def build_dataset(cfg, split):
         max_len    = cfg['data'].get('max_len'),
     )
     if split == 1:
-        common_kw['skip_rate'] = 10  # 驗證集只取 1/10，快速驗證
+        common_kw['skip_rate'] = 25  # 驗證集只取 1/10，快速驗證
     if ds_name == 'finefs':
         return FineFS(
             data_dir = cfg['data']['data_dir'],
@@ -44,10 +44,18 @@ def build_dataset(cfg, split):
         ), 24 * 3
     elif ds_name == 'h36m':
         joints = 17
-        return H36M(
-            data_dir  = cfg['data']['data_dir_h36m'],
-            joints    = joints,
-            **common_kw
+        return H36MUnified(
+            data_dir=cfg['data']['data_dir'],
+            joints=joints,
+            downsample=cfg['data'].get('downsample', 2),
+            no_overlap=cfg['data'].get('no_overlap', False),
+            protocol=cfg['data'].get('h36m_protocol', 'predictor'),
+            miss_type=cfg['data'].get('miss_type', 'no_miss'),
+            miss_rate=cfg['data'].get('miss_rate', 0.2),
+            all_data=cfg['data'].get('all_data', True),
+            data_ratio=cfg['data'].get('data_ratio', 1.0),
+            pad_short_sequences=cfg['data'].get('pad_short_sequences', True),
+            **common_kw,
         ), joints * 3
     else:
         raise ValueError(f"Unknown dataset: {ds_name}")
@@ -68,7 +76,8 @@ if __name__ == '__main__':
         ds_tag     = config['data'].get('dataset', 'finefs')
         input_n    = config['data']['input_n']
         output_n   = config['data']['output_n']
-        output_dir = config['data'].get('output_dir', 'default')
+        # Priority: --output_dir > --data.output_dir > auto-generated default.
+        output_dir = args.output_dir or config['data'].get('output_dir', 'default')
         if output_dir == 'default' or not output_dir:
             output_dir = f"runs/{ds_tag}_{input_n}_{output_n}_{now}"
         
@@ -93,14 +102,9 @@ if __name__ == '__main__':
         shuffle=True, num_workers=0
     )
 
-    # 0. 根據 Config 自動調整 textemb 維度
+    # 0. 固定 384, 先不用 CLIP
     txt_cfg = config.get("text_injection", {})
-    if txt_cfg.get("use_clip_encoder", False):
-        print("[Auto-Config] Detected CLIP usage, updating textemb to 512.")
-        config["model"]["textemb"] = 512
-    else:
-         # 確保 SBERT 至少是 384
-         config["model"]["textemb"] = 384
+    config["model"]["textemb"] = 384
 
     # ---------- Save Config Late (Fix) ---------- #
     if not args.resume_dir:

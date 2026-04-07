@@ -126,20 +126,28 @@ def main():
         print(f"🔄 Resuming from batch {resume_batch_offset}")
 
     print("📂 Loading Dataset...")
-    data_name = config['data'].get('name', 'FineFS').lower()
+    data_name = config['data'].get('dataset', 'FineFS').lower()
     _random_face           = config['data'].get('random_face', False)
     _filter_single_rot     = config['data'].get('filter_single_rotation', False)
     print(f"   Dataset={data_name} random_face={_random_face} filter_single_rotation={_filter_single_rot}")
     
     if data_name == 'h36m':
-        from motion_data.h36m import H36M
-        dataset = H36M(
+        from motion_data.h36m_unified import H36MUnified
+        dataset = H36MUnified(
             data_dir=config['data']['data_dir'],
             input_n=config['data']['input_n'],
             output_n=config['data']['output_n'],
             skip_rate=config['data']['skip_rate'],
             split=0,
-            joints=config['data'].get('joints', 17)
+            joints=config['data'].get('joints', 17),
+            downsample=config['data'].get('downsample', 1),
+            no_overlap=config['data'].get('no_overlap', False),
+            protocol=config['data'].get('h36m_protocol', 'predictor'),
+            miss_type=config['data'].get('miss_type', 'no_miss'),
+            miss_rate=config['data'].get('miss_rate', 0.2),
+            all_data=config['data'].get('all_data', True),
+            data_ratio=config['data'].get('data_ratio', 1.0),
+            pad_short_sequences=config['data'].get('pad_short_sequences', False),
         )
     else:
         dataset = FineFS(
@@ -184,13 +192,22 @@ def main():
     # Must load validation partition (split=1)
     print("🎥 Initializing Visualizer...")
     if data_name == 'h36m':
-        val_dataset = H36M(
+        val_dataset = H36MUnified(
             data_dir=config['data']['data_dir'],
             input_n=config['data']['input_n'],
             output_n=config['data']['output_n'],
-            skip_rate=config['data']['skip_rate'],
+            # skip rate 調高加速驗證
+            skip_rate=25,
             split=1,
-            joints=config['data'].get('joints', 17)
+            joints=config['data'].get('joints', 17),
+            downsample=config['data'].get('downsample', 1),
+            no_overlap=config['data'].get('no_overlap', False),
+            protocol=config['data'].get('h36m_protocol', 'predictor'),
+            miss_type=config['data'].get('miss_type', 'no_miss'),
+            miss_rate=config['data'].get('miss_rate', 0.2),
+            all_data=config['data'].get('all_data', True),
+            data_ratio=config['data'].get('data_ratio', 1.0),
+            pad_short_sequences=config['data'].get('pad_short_sequences', True),
         )
     else:
         val_dataset = FineFS(

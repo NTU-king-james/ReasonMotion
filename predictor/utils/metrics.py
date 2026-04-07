@@ -11,6 +11,7 @@ import torch
 import numpy as np
 from tqdm import tqdm
 from scipy import fft
+from scipy.spatial.distance import pdist
 
 from utils.text_encoder import TextEncoder
 
@@ -195,6 +196,49 @@ def compute_sparc(positions, fps=30, padlevel=4, fc=10.0, amp_th=0.05):
     
     return sparc
 
+def compute_diversity(pred, *args):
+    pred = np.asarray(pred)
+    if pred.shape[0] == 1:
+        return 0.0
+    dist = pdist(pred.reshape(pred.shape[0], -1))
+    diversity = dist.mean().item() if dist.size > 0 else 0.0
+    return diversity
+
+
+def compute_ade(pred, gt, *args):
+    pred = np.asarray(pred)
+    gt = np.asarray(gt)
+    diff = pred - gt
+    dist = np.linalg.norm(diff, axis=2).mean(axis=1)
+    return dist.min()
+
+
+def compute_fde(pred, gt, *args):
+    pred = np.asarray(pred)
+    gt = np.asarray(gt)
+    diff = pred - gt
+    dist = np.linalg.norm(diff, axis=2)[:, -1]
+    return dist.min()
+
+
+def compute_mmade(pred, gt, gt_multi):
+    gt_dist = []
+    for gt_multi_i in gt_multi:
+        dist = compute_ade(pred, gt_multi_i)
+        gt_dist.append(dist)
+    gt_dist = np.array(gt_dist).mean()
+    return gt_dist
+
+
+def compute_mmfde(pred, gt, gt_multi):
+    gt_dist = []
+    for gt_multi_i in gt_multi:
+        dist = compute_fde(pred, gt_multi_i)
+        gt_dist.append(dist)
+    gt_dist = np.array(gt_dist).mean()
+    return gt_dist
+
+
 def ampjpe(batch_pred, batch_gt, target_dim):
     """Calculates A-MPJPE by reshaping (B, N, target_dim, T) to (B, N, T, J, 3).
     Computes best-of-N error: min error among N samples for each batch item.
@@ -202,18 +246,19 @@ def ampjpe(batch_pred, batch_gt, target_dim):
     B, N, K, T = batch_pred.shape
     p = batch_pred.transpose(-1, -2).reshape(B, N, T, target_dim // 3, 3)
     g = batch_gt.transpose(-1, -2).reshape(B, N, T, target_dim // 3, 3)
-    
+
     # Calculate Euclidean distance: (B, N, T, J)
     dist = torch.norm(g - p, p=2, dim=-1)
-    
+
     # Average over time (T) and joints (J) to get error per sample: (B, N)
     error_per_sample = dist.mean(dim=(-1, -2))
-    
+
     # Best of N: min error over samples -> (B,)
     best_error = error_per_sample.min(dim=1)[0]
-    
+
     # Average over batch
     return best_error.mean() * 1000
+
 
 def fmpjpe(batch_pred, batch_gt, target_dim):
     """Calculates F-MPJPE for the final frame of the sequence.
@@ -222,38 +267,18 @@ def fmpjpe(batch_pred, batch_gt, target_dim):
     B, N, K, T = batch_pred.shape
     p = batch_pred[..., -1].reshape(B, N, target_dim // 3, 3)
     g = batch_gt[..., -1].reshape(B, N, target_dim // 3, 3)
-    
+
     # Calculate Euclidean distance: (B, N, J)
     dist = torch.norm(g - p, p=2, dim=-1)
-    
+
     # Average over joints (J) to get error per sample: (B, N)
     error_per_sample = dist.mean(dim=-1)
-    
+
     # Best of N: min error over samples -> (B,)
     best_error = error_per_sample.min(dim=1)[0]
-    
+
     # Average over batch
     return best_error.mean() * 1000
-
-def get_diversity(activation, diversity_times):
-    """Implementation of average Euclidean distance of M pairs."""
-    num_samples = activation.shape[0]
-    if num_samples < 2: return 0.0
-    
-    # Generate M unique unordered pairs (i, j) where i < j
-    if num_samples < 200:
-        indices = np.array([(i, j) for i in range(num_samples) for j in range(i + 1, num_samples)])
-    else:
-        # Randomly sample pairs for efficiency
-        indices = np.random.randint(0, num_samples, size=(diversity_times * 2, 2))
-        indices = indices[indices[:, 0] < indices[:, 1]] # Ensure i < j and unique
-
-    if len(indices) > diversity_times:
-        indices = indices[np.random.choice(len(indices), diversity_times, replace=False)]
-    
-    # Calculate ||z_i - z_j||_2
-    diff = activation[indices[:, 0]] - activation[indices[:, 1]]
-    return np.linalg.norm(diff, axis=1).mean()
 
 class MetricsEvaluator:
     def __init__(self, config, device='cuda'):
@@ -276,17 +301,20 @@ class MetricsEvaluator:
 
         Returns:
             dict: A dictionary containing the computed metrics:
-                - "A-MPJPE": Average Mean Per Joint Position Error over time.
-                - "F-MPJPE": Final Frame Mean Per Joint Position Error.
-                - "Div_Spatial": Spatial diversity (if relevant).
-                - "Div_Vel": Velocity diversity (if relevant).
-                - "Div_Acc": Acceleration diversity (if relevant).
-                - "LDLJ": Log Dimensionless Jerk (smoothness metric).
-                - "SPARC": Spectral Arc Length (smoothness metric).
+                - "AMPJPE": A-MPJPE in mm.
+                - "FMPJPE": F-MPJPE in mm.
+                - "ADE": Best-of-N average displacement error.
+                - "FDE": Best-of-N final displacement error.
+                - "MMADE": Multi-modal ADE (computed only when nsample > 1).
+                - "MMFDE": Multi-modal FDE (computed only when nsample > 1).
+                - "Diversity": Mean pairwise distance among generated samples.
         """
         model.eval()
-        amp_total, fmp_total, samples_list, n_batches = 0, 0, [], 0
-        ldlj_total, sparc_total = 0, 0
+        amp_total, fmp_total = 0.0, 0.0
+        ade_total, fde_total = 0.0, 0.0
+        mmade_total, mmfde_total = 0.0, 0.0
+        diversity_total = 0.0
+        n_sequences = 0
 
         with torch.no_grad():
             for batch in tqdm(dataloader, desc="Evaluating"):
@@ -300,43 +328,43 @@ class MetricsEvaluator:
 
                     # Only evaluate predicted frames (input_n:)
                     p_part, g_part = samples[..., self.input_n:], gt[..., self.input_n:]
-                    
-                    amp_total += ampjpe(p_part, g_part, self.target_dim).item()
-                    fmp_total += fmpjpe(p_part, g_part, self.target_dim).item()
-                    
-                    # Compute smoothness metrics (LDLJ and SPARC)
-                    # Take best sample (first) and convert to numpy: (B, K, T) -> (B, T, K)
-                    pred_np = p_part[:, 0].transpose(-1, -2).cpu().numpy()  # (B, T, K)
+                    # print(p_part.shape, g_part.shape)
+                    # exit(0)
+
+                    # Batch-level A/F-MPJPE (mm)
+                    batch_size = p_part.shape[0]
+                    amp_total += float(ampjpe(p_part, g_part, self.target_dim).item()) * batch_size
+                    fmp_total += float(fmpjpe(p_part, g_part, self.target_dim).item()) * batch_size
+
+                    pred_np = p_part.cpu().numpy().transpose(0, 1, 3, 2)  # (B, N, T, K)
+                    gt_np = g_part.cpu().numpy().transpose(0, 1, 3, 2)     # (B, N, T, K)
+
                     for b in range(pred_np.shape[0]):
-                        ldlj_total += compute_ldlj(pred_np[b], fps=self.fps)
-                        sparc_total += compute_sparc(pred_np[b], fps=self.fps)
-                    
-                    # Store samples for diversity calculation
-                    samples_list.append(p_part.cpu().numpy())
-                    n_batches += 1
+                        pred_b = pred_np[b]   # (N, T, K)
+                        gt_b = gt_np[b, 0]    # (T, K)
+
+                        ade_total += float(compute_ade(pred_b, gt_b))
+                        fde_total += float(compute_fde(pred_b, gt_b))
+
+                        if nsample > 1:
+                            # If multi-modal GT is unavailable in batch, fallback to single GT.
+                            gt_multi = [gt_b]
+                            mmade_total += float(compute_mmade(pred_b, gt_b, gt_multi))
+                            mmfde_total += float(compute_mmfde(pred_b, gt_b, gt_multi))
+
+                        diversity_total += float(compute_diversity(pred_b))
+                        n_sequences += 1
                 except Exception: continue
 
-        total_samples = sum(s.shape[0] for s in samples_list) if samples_list else 1
-        m = {
-            "A-MPJPE": amp_total/n_batches, 
-            "F-MPJPE": fmp_total/n_batches,
-            "LDLJ": ldlj_total/total_samples,
-            "SPARC": sparc_total/total_samples
+        denom = max(1, n_sequences)
+        mmade_avg = (mmade_total / denom) if nsample > 1 else None
+        mmfde_avg = (mmfde_total / denom) if nsample > 1 else None
+        return {
+            "AMPJPE": amp_total / denom,
+            "FMPJPE": fmp_total / denom,
+            "ADE": ade_total / denom,
+            "FDE": fde_total / denom,
+            "MMADE": mmade_avg,
+            "MMFDE": mmfde_avg,
+            "Diversity": diversity_total / denom,
         }
-        
-        if samples_list:
-            # Flatten all generations into a single sample pool for the dataset
-            all_s = np.concatenate(samples_list, axis=0) # (Total_B, N, K, T_out)
-            all_s = all_s.reshape(-1, self.target_dim, all_s.shape[-1]) # (Total_Samples, target_dim, T_out)
-            
-            div_times = min(300, len(all_s) // 2)
-            
-            # Spatial Diversity: Euclidean distance of joint features
-            m["Div_Spatial"] = get_diversity(all_s.reshape(len(all_s), -1), div_times)
-            
-            # Temporal Diversity: Euclidean distance of velocities (diff) and accelerations (double diff)
-            vel = np.diff(all_s, axis=-1).reshape(len(all_s), -1)
-            acc = np.diff(all_s, axis=-1, n=2).reshape(len(all_s), -1)
-            m["Div_Vel"], m["Div_Acc"] = get_diversity(vel, div_times), get_diversity(acc, div_times)
-                 
-        return m

@@ -21,6 +21,8 @@ def update_config(config, args_dict):
     for k, v in args_dict.items():
         if v is None:
             continue
+        if k in ['output_dir']:
+            continue
         keys = k.split('.')
         d = config
         for key in keys[:-1]:
@@ -44,6 +46,8 @@ def parse_args():
                         help='Path to config yaml file')
     parser.add_argument('--resume_dir', type=str, default=None,
                     help="Resume training from given output folder (auto load config & checkpoints)")
+    parser.add_argument('--output_dir', type=str, default=None,
+                        help='Output directory (shortcut, higher priority than --data.output_dir)')
     parser.add_argument('--data.data_dir', type=str, help="Dataset directory")
     parser.add_argument('--data.output_dir', type=str, help="Output directory to save models and logs")
 

@@ -2,17 +2,24 @@ project:
   name: "h36m_fairscale_rl"
   output_dir: "./runs/h36m_fairscale_rl"
 
-pretrained_ckpt: "/home/kingjames23/DePOSit_Skating_Predictor_BaseModel/runs/0304_h36m_fairscale/model.pth" # <-- 請替換為您的 H36M MoE SFT 模型
+pretrained_ckpt: "/home/kingjames23/ReasonMotion/predictor/runs/fairscale_h36m_25_100/checkpoints/model_ep16.pth" # <-- 請替換為您的 H36M MoE SFT 模型
 
 data:
-  name: "h36m"
+  all_data: true
   data_dir: /home/allen/datasets
+  data_ratio: 1.0
+  dataset: h36m
+  downsample: 1
+  h36m_protocol: deposit
   input_n: 25
-  max_len: null
-  mode: h36m
-  output_n: 100
-  skip_rate: 2
   joints: 17
+  miss_rate: 0.2
+  miss_type: no_miss
+  no_overlap: false
+  output_n: 100
+  pad_short_sequences: false
+  skip_rate: 1
+  split: 0
 
 diffusion:
   beta_end: 0.5
@@ -24,7 +31,6 @@ diffusion:
   num_steps: 50
   schedule: cosine
   moe: fairscale_rl
-  side_dim: 144  # timeemb(128) + featureemb(16)
 
 model:
   target_dim: 51  
@@ -41,7 +47,7 @@ model:
 
 rl:
   lr: 1e-5                
-  batch_size: 1          
+  batch_size: 2          
   num_samples_per_prompt: 8  
   diffusion_steps: 50     
 
@@ -54,16 +60,25 @@ rl:
   sampling_std: 0.02
   
   # 獎勵權重 0.7 GT + 0.3 Smooth
-  w_gt: 0.7             
-  w_smooth: 0.3          
+  w_gt: 1.0             
+  w_smooth: 0          
   w_score: 0.0            
   w_righthand: 0.0        
   w_rot: 0.0           
-  rot_threshold: 0.1    
+  rot_threshold: 0    
 
   kl_coef: 0.01          
   kl_clip_value: 0.2
 
-  save_checkpoint_every: 300    
-  visualize_every: 5000          
-  update_ref_every_batch: 3000
+  save_checkpoint_every: 250    
+  visualize_every: 1000          
+  update_ref_every_batch: 1000
+
+text_injection:
+  decouple_spatial_temporal: false
+  use_clip_encoder: false
+  use_deep_text_projector: false
+  use_late_injection: false
+  use_time_aware_film: false
+
+grad_clip: 1.0
