@@ -45,12 +45,12 @@ python visualize_every_batch.py \
 
 python visualize_every_batch.py \
     --mode h36m \
-    --run_dir "/home/allen/Diffusion/ReasonMotion_SFT_GRPO_Trajectory/runs/h36m_run" \
+    --run_dir "/home/kingjames23/ReasonMotion/predictor/runs/h36m_fairscale_rl_with_smooth" \
     --data_dir "/home/allen/datasets" \
     --sample_idx 0 \
     --batch_start 0 \
     --batch_end 1000 \
-    --step 250 \
+    --step 200 \
     --seed 123
 """
 

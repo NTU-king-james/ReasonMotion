@@ -43,7 +43,8 @@ def build_dataset(cfg, split):
             **common_kw
         ), 24 * 3
     elif ds_name == 'h36m':
-        joints = 17
+        #joints = 22
+        joints = cfg['data'].get('joints', 22)
         return H36MUnified(
             data_dir=cfg['data']['data_dir'],
             joints=joints,

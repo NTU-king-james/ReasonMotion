@@ -668,11 +668,17 @@ class GRPOTrainer:
             
             if (batch_idx + 1) % log_every == 0:
                 current_avg_metrics = {k: np.mean(v) if v else 0.0 for k, v in epoch_metrics.items()}
+                # Keep running-mean metrics, but log KL terms as current batch values.
+                current_log_metrics = dict(current_avg_metrics)
+                if epoch_metrics["kl"]:
+                    current_log_metrics["kl"] = epoch_metrics["kl"][-1]
+                if epoch_metrics["kl_penalty"]:
+                    current_log_metrics["kl_penalty"] = epoch_metrics["kl_penalty"][-1]
                 
                 if hasattr(self, 'batch_logger'):
                     actual_batch = batch_idx + 1 + batch_offset
                     batch_id = f"E{epoch}_B{actual_batch}"
-                    self.batch_logger.log_batch(batch_id, current_avg_metrics)
+                    self.batch_logger.log_batch(batch_id, current_log_metrics)
                     
                     # [Mod] Clear metrics ONLY if Ref Model was just updated.
                     # This resets the accumulation cycle (e.g., at Batch 3000).

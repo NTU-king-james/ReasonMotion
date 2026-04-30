@@ -1,8 +1,8 @@
 project:
-  name: "0428_moe_rl_h36m_10_10"
-  output_dir: "runs/0428_moe_rl_h36m_10_10"
+  name: "0428_base_rl_h36m_10_10"
+  output_dir: "runs/0428_base_rl_h36m_10_10"
 
-pretrained_ckpt: "/home/kingjames23/ReasonMotion/predictor/runs/moe_h36m_10_10/checkpoints/model_ep22.pth" # <-- 請替換為您的 H36M MoE SFT 模型
+pretrained_ckpt: "/home/kingjames23/ReasonMotion/predictor/runs/base_h36m_10_10/checkpoints/model_ep41.pth" # <-- 請替換為您的 H36M MoE SFT 模型
 
 data:
   all_data: true
@@ -30,20 +30,20 @@ diffusion:
   nheads: 8
   num_steps: 50
   schedule: cosine
-  moe: fairscale_rl
+  moe: False
 
 model:
-  target_dim: 66  
-  balance_loss: true
+  target_dim: 66
+  balance_loss: False
   balance_loss_weight: 0.01
   multirouter: false
   featureemb: 16
   is_unconditional: 0
+  text_encoder: sentence-transformer
   text_mode: cross_attn
   textemb: 384
   timeemb: 128
-  use_r3: true            # Strategy C — Detached Single-Step R3
-  use_rot_loss: false
+  use_r3: False
 
 rl:
   lr: 1e-5                
@@ -60,8 +60,8 @@ rl:
   sampling_std: 0.015
   
   # 獎勵權重 0.7 GT + 0.3 Smooth
-  w_gt: 0.8             
-  w_smooth: 0.3          
+  w_gt: 0.7         
+  w_smooth: 0.3    
   w_score: 0.0            
   w_righthand: 0.0        
   w_rot: 0.0           

@@ -110,9 +110,14 @@ class H36MUnified(Dataset):
             self.dim_used = np.arange(96)
 
         if protocol == "deposit":
+            # CoMusion Setting
             split_subjects = [[1, 5, 6, 7, 8], [11], [9, 11]]
+            # AuxFormer Setting
+            split_subjects = [[1, 9, 6, 7, 8], [11], [5]]
         else:
             split_subjects = [[1, 5, 6, 7, 8], [11], [9, 11]]
+            # AuxFormer Setting
+            split_subjects = [[1, 6, 7, 8, 9], [11], [5]]
 
         self.subjects = split_subjects[split]
         self.actions = actions or [
@@ -122,8 +127,10 @@ class H36MUnified(Dataset):
             "walkingtogether",
         ]
 
+        # whole motion seqs
         self.p3d: Dict[int, np.ndarray] = {}
         self.motion_labels: Dict[int, str] = {}
+        # (key, start_frame)
         self.data_idx: List[Tuple[int, int]] = []
 
         self._build_index()
@@ -170,8 +177,6 @@ class H36MUnified(Dataset):
 
         for subj in self.subjects:
             for action in self.actions:
-                if self.protocol == "deposit" and (not self.all_data) and key >= 30:
-                    continue
 
                 if self.split <= 1:
                     for subact in [1, 2]:
@@ -239,6 +244,14 @@ class H36MUnified(Dataset):
         return _build_nomiss_mask(self.in_n, self.out_n, pose.shape[1])
 
     def __getitem__(self, idx) -> Dict[str, Any]:
+        """回傳單筆資料字典，包含：
+        - pose: (seq_len, len(dim_used))，單位為公尺且只保留使用維度。
+        - pose_32: (seq_len, full_dim)，原始 32 joints 姿態（毫米）。
+        - mask: (seq_len, len(dim_used))，對應 pose 的觀測遮罩。
+        - timepoints: (seq_len,) 時間索引 [0, ..., seq_len-1]。
+        - motion_name: 該序列的動作名稱（若無標籤則為 "unknown"）。
+        - judge_score: 預設評分（float，固定 0.0）。
+        """
         key, start_frame = self.data_idx[idx]
         fs = np.arange(start_frame, start_frame + self.seq_len)
 

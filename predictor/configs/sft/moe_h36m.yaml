@@ -2,8 +2,8 @@
 # H3.6M Training Config
 train:
   epochs: 50
-  batch_size: 16
-  batch_size_test: 16
+  batch_size: 32
+  batch_size_test: 32
   lr: 2.0e-4
   valid_epoch_interval: 1
 
@@ -11,33 +11,33 @@ data:
   dataset: "h36m"
   data_dir: "/home/allen/datasets"
   h36m_protocol: "deposit"
-  input_n: 25               
-  output_n: 100              
+  input_n: 10              
+  output_n: 10       
   skip_rate: 1 
   split: 0
   joints: 17
-  downsample: 1
+  downsample: 2
   miss_type: "no_miss"
   miss_rate: 0.2
   no_overlap: false # 切窗可不可以重疊
   all_data: true
   data_ratio: 1.0
   pad_short_sequences: false # 要不要對長度不足的 data 做 padding
-  output_dir: "runs/fairscale_h36m_25_100" # 模型權重和訓練日誌的輸出路徑
+  output_dir: "runs/model_s_moe_h36m" # 模型權重和訓練日誌的輸出路徑
 
 diffusion:
   beta_end: 0.5
   beta_start: 0.0001
   channels: 64
   diffusion_embedding_dim: 128
-  layers: 12
+  layers: 8
   nheads: 8
   num_steps: 50
   schedule: cosine
   moe: fairscale_rl
 
 model:
-  balance_loss: true
+  balance_loss: True
   balance_loss_weight: 0.01
   multirouter: false
   featureemb: 16
@@ -46,6 +46,7 @@ model:
   text_mode: cross_attn
   textemb: 384
   timeemb: 128
+  use_r3: True
 
 text_injection:
   decouple_spatial_temporal: false
