@@ -26,6 +26,7 @@
 
 7. **short-term paper 比較可能有 protocol 差異，也可能是 base model 本身不強**  
    你的 `eval_mpjpe.py` 是 single sample、future-only MPJPE，時間映射在 `downsample=2` 下是 25 FPS，80/160/320/400ms 對應 future index 1/3/7/9，這大致合理。差異更可能來自：joint set 17 vs 22、action-wise average vs sample-wise average、是否 deterministic、是否 best-of-N、是否 train output_n=25、以及你的模型本身是 diffusion/imputation style，不一定針對 short-term deterministic MPJPE 最優化。
+8. loss step 要 normalize ?
 
 ## 建議優先順序
 

@@ -39,6 +39,7 @@ diffusion:
 
 rl:
   fs_reward_ckpt: "utils/fs_reward_utils/checkpoints_goe/best_model_goe.pth"
+  ref_ckpt: null           # Fixed KL ref; null falls back to top-level pretrained_ckpt. Set explicitly when resuming RL.
   lr: 1e-5                # 學習率 (大幅降低以增加稳定性，原 1e-5)
   batch_size: 1          # Reduce for Dry Run (1)
   num_samples_per_prompt: 8  # Reduce for Dry Run (4)
@@ -61,10 +62,12 @@ rl:
   w_rot: 0           # 建議與 GT 權重相當或稍高
   rot_threshold: 0.1    # 容忍 0.1 圈 (36度) 的誤差
 
+  epsilon: 0.2           # PPO/GRPO clipped ratio range
+  ppo_epochs: 2          # Reuse each old-policy rollout for clipped updates
   kl_coef: 0.01          # KL 懲罰係數 (增加至 0.1 防止策略偏離)
   kl_clip_value: 0.2
 
   # 中間檢查點與視覺化 (防止長時間訓練無法監控)
   save_checkpoint_every: 500    # 每 N 個 batch 保存一次 checkpoint (約 10 分鐘, 全部保留以觀察變化)
   visualize_every: 5000          # 每 N 個 batch 執行一次視覺化 (約 10 分鐘)
-  update_ref_every_batch: 3000
+  update_ref_every_batch: null    # Fixed-reference KL uses pretrained/base model

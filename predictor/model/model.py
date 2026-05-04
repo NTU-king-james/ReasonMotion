@@ -300,7 +300,7 @@ class ModelMain(nn.Module):
 
     # ====================== GRPO / Trajectory ==========================
 
-    def sample_trajectory(self, text_emb, batch, G):
+    def sample_trajectory(self, text_emb, batch, G, return_step_log_probs=False):
         """全去噪鏈取樣，回傳 G 條軌跡供 GRPO 使用。
 
         當 ``use_r3=True`` 時，額外收集每步的 MoE routing 決策，
@@ -308,12 +308,15 @@ class ModelMain(nn.Module):
 
         Returns:
             final_samples  : (B, G, K, L)
-            total_log_probs: (B, G)
+            total_log_probs: (B, G), future-only normalized trajectory log-prob
+            step_log_probs : optional (num_steps-1, B, G), returned when
+                             return_step_log_probs=True
             all_latents    : list[Tensor (B, G, K, L)], length = num_steps+1
                              [x_T, x_{T-1}, ..., x_0]
             all_routing    : list[dict] | None
-                             若 ``use_r3``，長度 = num_steps，迭代順序同 loop
-                             （即 index 0 = t=T-1, index -1 = t=0）。
+                             若 ``use_r3``，長度 = num_steps，迭代順序同 loop。
+                             index 0 = t=T-1，最後一筆 = deterministic t=0；
+                             log-prob / backprop 只使用 t=T-1...1。
                              每個 dict: key → (N, 2) int64 detached tensor。
                              若非 R3 模式，回傳 ``None``。
         """
@@ -321,9 +324,11 @@ class ModelMain(nn.Module):
         side_info = self.get_side_info(observed_tp, gt_mask)
         B, K, L = observed_data.shape
 
-        x_t = torch.randn(B, 1, K, L, device=self.device).expand(-1, G, -1, -1).clone()
+        noise_scale = max(float(getattr(self, "sampling_std", 1.0)), 1e-6)
+        x_t = (torch.randn(B, 1, K, L, device=self.device) * noise_scale).expand(-1, G, -1, -1).clone()
         all_latents = [x_t]
         total_log_probs = torch.zeros(B, G, device=self.device)
+        step_log_probs = []
         all_routing = [] if self.use_r3 else None
 
         alpha_hat = torch.tensor(self.alpha_hat, device=self.device).float()
@@ -332,6 +337,8 @@ class ModelMain(nn.Module):
         side_rep  = side_info.repeat_interleave(G, dim=0)
         cond_rep  = gt_mask.repeat_interleave(G, dim=0)
         obs_rep   = observed_data.repeat_interleave(G, dim=0)
+        future_mask = (1 - gt_mask).repeat_interleave(G, dim=0)
+        future_denom = future_mask.sum(dim=(1, 2)).clamp(min=1.0)
         if isinstance(text_emb, tuple):
             text_rep = tuple(u.repeat_interleave(G, dim=0) for u in text_emb)
         else:
@@ -353,11 +360,14 @@ class ModelMain(nn.Module):
             mean = c1 * (x_t_flat - c2 * eps)
 
             if t > 0:
-                sigma = math.sqrt((1 - alpha[t - 1]) / (1 - alpha[t]) * self.beta[t])
+                sigma = math.sqrt((1 - alpha[t - 1]) / (1 - alpha[t]) * self.beta[t]) * noise_scale
                 z     = torch.randn_like(mean)
                 x_prev = mean + sigma * z
-                step_lp = (-0.5 * z ** 2 - math.log(sigma)).sum(dim=(1, 2))
-                total_log_probs += step_lp.reshape(B, G)
+                step_lp_elem = -0.5 * z ** 2 - math.log(sigma) - 0.5 * math.log(2 * math.pi)
+                step_lp = (step_lp_elem * future_mask).sum(dim=(1, 2)) / future_denom
+                step_lp = step_lp.reshape(B, G)
+                total_log_probs += step_lp
+                step_log_probs.append(step_lp)
                 x_t = x_prev.reshape(B, G, K, L)
             else:
                 x_t = mean.reshape(B, G, K, L)
@@ -367,16 +377,21 @@ class ModelMain(nn.Module):
             x_t = x_t.detach()
 
         final_samples = x_t * (1 - gt_mask.unsqueeze(1)) + observed_data.unsqueeze(1) * gt_mask.unsqueeze(1)
+        if step_log_probs:
+            total_log_probs = total_log_probs / len(step_log_probs)
+            step_log_probs = torch.stack(step_log_probs, dim=0)
+        else:
+            step_log_probs = torch.empty(0, B, G, device=self.device)
+        if return_step_log_probs:
+            return final_samples, total_log_probs, step_log_probs, all_latents, all_routing
         return final_samples, total_log_probs, all_latents, all_routing
 
-    def get_trajectory_log_prob(self, all_latents, text_emb, batch):
-        """計算給定軌跡在本模型（作為 reference）下的 log-prob。
+    def get_trajectory_step_log_probs(self, all_latents, text_emb, batch, all_routing=None):
+        """Return per-denoising-step log-probs for a sampled trajectory.
 
-        Args:
-            all_latents: [x_T, ..., x_0], len = num_steps+1, each (B, G, K, L)
-
-        Returns:
-            (B, G) total log prob
+        The deterministic final transition ``t=0`` is excluded. Each step is
+        averaged over future/missing elements only, so the scale is independent
+        of the observed prefix, joint count, and sequence length.
         """
         observed_data, observed_tp, gt_mask = self.process_data(batch)
         side_info = self.get_side_info(observed_tp, gt_mask)
@@ -389,39 +404,70 @@ class ModelMain(nn.Module):
         side_rep = side_info.repeat_interleave(G, dim=0)
         cond_rep = gt_mask.repeat_interleave(G, dim=0)
         obs_rep  = observed_data.repeat_interleave(G, dim=0)
+        future_mask = (1 - gt_mask).repeat_interleave(G, dim=0)
+        future_denom = future_mask.sum(dim=(1, 2)).clamp(min=1.0)
         if isinstance(text_emb, tuple):
             text_rep = tuple(u.repeat_interleave(G, dim=0) for u in text_emb)
         else:
             text_rep = text_emb.repeat_interleave(G, dim=0) if text_emb is not None else None
 
-        total_lp = torch.zeros(B, G, device=self.device)
-
-        for t in reversed(range(self.num_steps)):
+        noise_scale = max(float(getattr(self, "sampling_std", 1.0)), 1e-6)
+        step_lps = []
+        step_idx = 0
+        for t in reversed(range(1, self.num_steps)):
             idx_curr = self.num_steps - (t + 1)
             idx_next = self.num_steps - t
             x_t    = all_latents[idx_curr]
             x_prev = all_latents[idx_next]
 
-            x_t_flat = x_t.reshape(B * G, K, L)
+            x_t_flat = x_t.reshape(B * G, K, L).detach()
             inp  = self.set_input_to_diffmodel(x_t_flat, obs_rep, cond_rep)
             t_vec = torch.full((B * G,), t, dtype=torch.long, device=self.device)
+
+            if all_routing is not None and step_idx < len(all_routing):
+                self._inject_moe_routing(all_routing[step_idx])
 
             eps  = self.diffmodel(inp, side_rep, t_vec, text_emb=text_rep)
             c1   = 1 / alpha_hat[t].sqrt()
             c2   = (1 - alpha_hat[t]) / (1 - alpha[t]).sqrt()
             mean = c1 * (x_t_flat - c2 * eps)
 
-            sigma = math.sqrt((1 - alpha[t - 1]) / (1 - alpha[t]) * self.beta[t])
-            x_prev_flat = x_prev.reshape(B * G, K, L)
+            sigma = math.sqrt((1 - alpha[t - 1]) / (1 - alpha[t]) * self.beta[t]) * noise_scale
+            x_prev_flat = x_prev.reshape(B * G, K, L).detach()
             mse  = (x_prev_flat - mean) ** 2
-            lp   = (-0.5 * mse / sigma ** 2 - math.log(sigma)).sum(dim=(1, 2))
-            total_lp += lp.reshape(B, G)
+            lp_elem = -0.5 * mse / sigma ** 2 - math.log(sigma) - 0.5 * math.log(2 * math.pi)
+            lp = (lp_elem * future_mask).sum(dim=(1, 2)) / future_denom
+            step_lps.append(lp.reshape(B, G))
+            step_idx += 1
 
-        return total_lp
+        if not step_lps:
+            return torch.empty(0, B, G, device=self.device)
+        return torch.stack(step_lps, dim=0)
+
+    def get_trajectory_log_prob(self, all_latents, text_emb, batch):
+        """計算給定軌跡在本模型（作為 reference）下的 log-prob。
+
+        Args:
+            all_latents: [x_T, ..., x_0], len = num_steps+1, each (B, G, K, L)
+
+        Returns:
+            (B, G) total log prob
+        """
+        step_lps = self.get_trajectory_step_log_probs(all_latents, text_emb, batch)
+        if step_lps.numel() == 0:
+            B = all_latents[0].shape[0]
+            G = all_latents[0].shape[1]
+            return torch.zeros(B, G, device=self.device)
+        return step_lps.mean(dim=0)
 
     def backprop_trajectory_loss(self, all_latents, text_emb, batch, advantages,
+                                  old_step_log_probs=None,
+                                  ref_step_log_probs=None,
+                                  epsilon=0.2,
+                                  kl_coef=0.0,
+                                  max_kl_penalty=None,
                                   all_routing=None):
-        """Memory-efficient GRPO backprop：逐步計算 log-prob 並立即 backward。
+        """Memory-efficient clipped GRPO/PPO backprop.
 
         當 ``all_routing`` 不為 None 時，在每一步的 diffmodel forward 前
         注入推理階段記錄的 routing，讓 FairscaleMoEBlock_RL 走 R3 masked
@@ -430,9 +476,11 @@ class ModelMain(nn.Module):
         Args:
             all_latents : list from ``sample_trajectory``
             advantages  : (B, G) — 歸一化後的 advantage
+            old_step_log_probs : (num_steps-1, B, G), detached rollout policy
+            ref_step_log_probs : (num_steps-1, B, G), detached fixed reference
             all_routing : list[dict] | None — 來自 ``sample_trajectory``
-                          的 R3 routing，長度 = num_steps，與 loop 迭代順
-                          序一致（index 0 = t=T-1）。
+                          的 R3 routing。若包含 deterministic t=0 routing，
+                          本函式只使用前 num_steps-1 筆（t=T-1...1）。
         """
         observed_data, observed_tp, gt_mask = self.process_data(batch)
         side_info = self.get_side_info(observed_tp, gt_mask)
@@ -445,15 +493,19 @@ class ModelMain(nn.Module):
         side_rep = side_info.repeat_interleave(G, dim=0).detach()
         cond_rep = gt_mask.repeat_interleave(G, dim=0).detach()
         obs_rep  = observed_data.repeat_interleave(G, dim=0).detach()
+        future_mask = (1 - gt_mask).repeat_interleave(G, dim=0).detach()
+        future_denom = future_mask.sum(dim=(1, 2)).clamp(min=1.0)
         if isinstance(text_emb, tuple):
             text_rep = tuple(u.repeat_interleave(G, dim=0).detach() for u in text_emb)
         else:
             text_rep = text_emb.repeat_interleave(G, dim=0).detach() if text_emb is not None else None
 
-        adv_flat = advantages.view(-1)  # (B*G,)
+        adv = advantages.detach()
+        noise_scale = max(float(getattr(self, "sampling_std", 1.0)), 1e-6)
+        num_policy_steps = max(1, self.num_steps - 1)
 
         step_idx = 0
-        for t in reversed(range(self.num_steps)):
+        for t in reversed(range(1, self.num_steps)):
             idx_curr = self.num_steps - (t + 1)
             idx_next = self.num_steps - t
             x_t    = all_latents[idx_curr]
@@ -472,15 +524,35 @@ class ModelMain(nn.Module):
             c2   = (1 - alpha_hat[t]) / (1 - alpha[t]).sqrt()
             mean = c1 * (x_t_flat - c2 * eps)
 
-            sigma = math.sqrt((1 - alpha[t - 1]) / (1 - alpha[t]) * self.beta[t])
-            x_prev_flat = x_prev.reshape(B * G, K, L)
+            sigma = math.sqrt((1 - alpha[t - 1]) / (1 - alpha[t]) * self.beta[t]) * noise_scale
+            x_prev_flat = x_prev.reshape(B * G, K, L).detach()
             mse  = (x_prev_flat - mean) ** 2
-            lp   = (-0.5 * mse / sigma ** 2 - math.log(sigma)).sum(dim=(1, 2))
+            lp_elem = -0.5 * mse / sigma ** 2 - math.log(sigma) - 0.5 * math.log(2 * math.pi)
+            lp = (lp_elem * future_mask).sum(dim=(1, 2)) / future_denom
+            new_lp = lp.reshape(B, G)
 
-            loss_step = -(lp * adv_flat).mean()
+            if old_step_log_probs is None:
+                loss_step = -(new_lp * adv).mean()
+            else:
+                old_lp = old_step_log_probs[step_idx].to(self.device).detach()
+                ratio = torch.exp(torch.clamp(new_lp - old_lp, min=-20.0, max=20.0))
+                clipped_ratio = torch.clamp(ratio, 1.0 - epsilon, 1.0 + epsilon)
+                surrogate = torch.minimum(ratio * adv, clipped_ratio * adv)
+                loss_step = -surrogate.mean()
+
+            if ref_step_log_probs is not None and kl_coef > 0:
+                ref_lp = ref_step_log_probs[step_idx].to(self.device).detach()
+                log_ref_new = torch.clamp(ref_lp - new_lp, min=-20.0, max=20.0)
+                approx_kl = torch.exp(log_ref_new) - log_ref_new - 1.0
+                kl_loss = kl_coef * approx_kl
+                if max_kl_penalty is not None:
+                    kl_loss = torch.clamp(kl_loss, max=max_kl_penalty)
+                loss_step = loss_step + kl_loss.mean()
+
+            loss_step = loss_step / num_policy_steps
             loss_step.backward()
 
-            del loss_step, lp, eps, mean, inp
+            del loss_step, lp, new_lp, eps, mean, inp
             step_idx += 1
 
     # ====================== 其他輔助 ==========================

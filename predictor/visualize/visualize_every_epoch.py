@@ -18,7 +18,7 @@ python visualize_every_epoch.py \
   --res_pk "/home/allen/datasets/FineFS_5s/3_final/valid/4F/4F_0011/new_res.pk" \
   --text "quadruple" \
   --epoch_start 1 \
-  --epoch_end 50 \
+  --epoch_end 200 \
   --step 5 \
   --seed 123 --slidewindow 0
 """

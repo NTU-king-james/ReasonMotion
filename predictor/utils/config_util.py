@@ -73,10 +73,14 @@ def parse_args():
     parser.add_argument('--rl.epsilon', type=float, help='PPO Clip Epsilon')
     parser.add_argument('--rl.kl_coef', type=float, help='KL Penalty Coefficient')
     parser.add_argument('--rl.sampling_std', type=float, help='Exploration Noise Std')
+    parser.add_argument('--rl.ppo_epochs', type=int)
+    parser.add_argument('--rl.max_train_batches', type=int)
     
     # === Rewards [新增] ===
     parser.add_argument('--rl.w_gt', type=float)
     parser.add_argument('--rl.w_smooth', type=float)
+    parser.add_argument('--rl.smooth_floor', type=float)
+    parser.add_argument('--rl.smooth_floor_penalty', type=float)
     parser.add_argument('--rl.w_score', type=float)
     parser.add_argument('--rl.fs_reward_ckpt', type=str)
     parser.add_argument('--rl.w_righthand', type=float, help='Sanity Check: Right Hand Height Weight')

@@ -1,8 +1,8 @@
 project:
-  name: "0428_moe_rl_h36m_10_10"
-  output_dir: "runs/0428_moe_rl_h36m_10_10"
+  name: "0501_moe_rl_h36m_smooth_guard"
+  output_dir: "runs/0501_moe_rl_h36m_smooth_guard"
 
-pretrained_ckpt: "/home/kingjames23/ReasonMotion/predictor/runs/moe_h36m_10_10/checkpoints/model_ep22.pth" # <-- 請替換為您的 H36M MoE SFT 模型
+pretrained_ckpt: "/home/kingjames23/ReasonMotion-project/ReasonMotion/predictor/runs/moe_h36m_10_10/checkpoints/model_ep23.pth" # <-- 請替換為您的 H36M MoE SFT 模型
 
 data:
   all_data: true
@@ -46,10 +46,12 @@ model:
   use_rot_loss: false
 
 rl:
-  lr: 1e-5                
+  ref_ckpt: null           # Fixed KL ref; null falls back to top-level pretrained_ckpt. Set explicitly when resuming RL.
+  lr: 3e-6                
   batch_size: 8          
-  num_samples_per_prompt: 8  
+  num_samples_per_prompt: 16  
   diffusion_steps: 50     
+  max_train_batches: 1000   # short-run guard for the smoothness-collapse test
 
   # Visualization Params
   vis_target_path: null
@@ -59,20 +61,24 @@ rl:
 
   sampling_std: 0.015
   
-  # 獎勵權重 0.7 GT + 0.3 Smooth
-  w_gt: 0.8             
-  w_smooth: 0.3          
+  # Smoothness-first reward: let GT move slightly if needed to preserve smooth motion.
+  w_gt: 0.45             
+  w_smooth: 0.55
+  smooth_floor: 0.85
+  smooth_floor_penalty: 1.0
   w_score: 0.0            
   w_righthand: 0.0        
   w_rot: 0.0           
   rot_threshold: 0    
 
-  kl_coef: 0.003          
+  epsilon: 0.1           # PPO/GRPO clipped ratio range
+  ppo_epochs: 1          # Conservative update: one pass per rollout
+  kl_coef: 0.01         
   kl_clip_value: 0.2
 
   save_checkpoint_every: 100    
   visualize_every: 400          
-  update_ref_every_batch: 200
+  update_ref_every_batch: null    # Fixed-reference KL uses pretrained/base model
 
 text_injection:
   decouple_spatial_temporal: false

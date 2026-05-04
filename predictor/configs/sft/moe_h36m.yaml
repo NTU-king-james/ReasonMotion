@@ -11,12 +11,12 @@ data:
   dataset: "h36m"
   data_dir: "/home/allen/datasets"
   h36m_protocol: "deposit"
-  input_n: 10              
-  output_n: 10       
+  input_n: 10    # 要特別注意！          
+  output_n: 10   # 要特別注意！    
   skip_rate: 1 
   split: 0
-  joints: 17
-  downsample: 2
+  joints: 17    # 要特別注意！
+  downsample: 1 # 要特別注意！
   miss_type: "no_miss"
   miss_rate: 0.2
   no_overlap: false # 切窗可不可以重疊
@@ -30,14 +30,14 @@ diffusion:
   beta_start: 0.0001
   channels: 64
   diffusion_embedding_dim: 128
-  layers: 8
+  layers: 8 # 要特別注意！
   nheads: 8
   num_steps: 50
   schedule: cosine
-  moe: fairscale_rl
+  moe: fairscale_rl # 要特別注意！
 
 model:
-  balance_loss: True
+  balance_loss: True # 要特別注意！
   balance_loss_weight: 0.01
   multirouter: false
   featureemb: 16
@@ -46,7 +46,7 @@ model:
   text_mode: cross_attn
   textemb: 384
   timeemb: 128
-  use_r3: True
+  use_r3: True # 要特別注意！
 
 text_injection:
   decouple_spatial_temporal: false

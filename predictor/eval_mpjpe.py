@@ -8,9 +8,9 @@ Protocol:
 
 Example:
 CUDA_VISIBLE_DEVICES=0 python eval_mpjpe.py \
-    --ckpt /home/kingjames23/ReasonMotion/predictor/runs/0428_moe_rl_h36m_10_10/checkpoints/checkpoint_ep1_batch300.pth \
-    --config /home/kingjames23/ReasonMotion/predictor/runs/0428_moe_rl_h36m_10_10/config.yaml \
-    --batch_size 64
+    --ckpt /home/kingjames23/ReasonMotion-project/ReasonMotion/predictor/runs/0503_moe_rl_h36m_smooth_guard/checkpoints/checkpoint_ep1_batch500.pth \
+    --config /home/kingjames23/ReasonMotion-project/ReasonMotion/predictor/runs/0503_moe_rl_h36m_smooth_guard/config.yaml\
+    --batch_size 128
 """
 
 import argparse

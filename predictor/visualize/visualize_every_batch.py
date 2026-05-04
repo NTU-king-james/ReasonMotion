@@ -33,6 +33,17 @@ H36M_EDGES = [
     (8, 14), (14, 15), (15, 16)     # r-arm
 ]
 
+H36M_22_EDGES = [
+    (0, 1), (1, 2), (2, 3),         # r-leg
+    (4, 5), (5, 6), (6, 7),         # l-leg
+    (0, 8), (4, 8),                 # bridge missing hip/root joints
+    (8, 9), (9, 10), (10, 11),      # spine/head
+    (9, 12), (12, 13), (13, 14),    # l-arm
+    (14, 15), (14, 16),             # l-hand branches
+    (9, 17), (17, 18), (18, 19),    # r-arm
+    (19, 20), (19, 21),             # r-hand branches
+]
+
 """
 python visualize_every_batch.py \
   --run_dir "/home/allen/Diffusion/ReasonMotion_SFT_GRPO_Trajectory/runs/0128_balance_reward_from_bad_seed" \
@@ -43,13 +54,13 @@ python visualize_every_batch.py \
   --step 300 \
   --seed 123 --slidewindow 10
 
-python visualize_every_batch.py \
+CUDA_VISIBLE_DEVICES=5 python visualize_every_batch.py \
     --mode h36m \
-    --run_dir "/home/kingjames23/ReasonMotion/predictor/runs/h36m_fairscale_rl_with_smooth" \
+    --run_dir "/home/kingjames23/ReasonMotion-project/ReasonMotion/predictor/runs/0503_moe_rl_h36m_smooth_guard" \
     --data_dir "/home/allen/datasets" \
-    --sample_idx 0 \
+    --sample_idx 164 \
     --batch_start 0 \
-    --batch_end 1000 \
+    --batch_end 600 \
     --step 200 \
     --seed 123
 """
@@ -70,6 +81,8 @@ def infer_joint_count(xyz: np.ndarray, config: dict) -> int:
 def get_edges(joints: int):
     if joints == 24:
         return FINEFS_EDGES
+    if joints == 22:
+        return H36M_22_EDGES
     if joints == 17:
         return H36M_EDGES
     return []

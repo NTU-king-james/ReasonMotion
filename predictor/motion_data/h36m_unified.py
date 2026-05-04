@@ -84,6 +84,7 @@ class H36MUnified(Dataset):
         self.pad_short_sequences = (
             (protocol == "predictor") if pad_short_sequences is None else pad_short_sequences
         )
+        self.pad_short_sequences = False
 
         if joints == 17:
             self.dim_used = np.array(

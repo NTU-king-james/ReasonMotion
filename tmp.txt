@@ -1,0 +1,10 @@
+我想請你確認這份 md 檔對於我 train_grpo.py 實作有關的描述是否正確，如果無誤的話我想請你針對其建議優先順序 1, 2, 3做處理，由於 visulize jitter 的部分我還沒決定好要用什麼 metric，這部分的處理你可以先跳過
+
+我可以總結最重要的幾點
+1. observed frame 沒有丟掉，甚至被納入 loss 計算之內
+2. backprop_trajectory_loss
+- 跟 GRPO 方法並不相同，沒有利用 old model 比較 ratio，也沒有利用 epsilon 做 Clipping
+- alpha 在 t = 0 的時候會出問題(這部分我目前是在 trace 機率的時候設定他只 trace 到 t=1，因為 diffusion step 本來在 t=0 時就不會 sample noise)
+
+
+我想要跟你確認 rl_utils.py 這邊，目前會使用 old and new model sample trajectory算 KL，這部分是不是也怪怪的啊，因為 KL 應該是單純比較 model 間的差別跟 trajectory沒關係吧，trajectory 那邊應該是要拿來計算 loss 才對，你的想法呢

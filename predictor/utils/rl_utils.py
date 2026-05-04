@@ -17,10 +17,24 @@ class BatchLogger:
         os.makedirs(log_dir, exist_ok=True)
         self.csv_path = os.path.join(log_dir, "batch_metrics.csv")
         # [Mod] Removed meaningless Policy_Loss. Focus on Advantages.
-        self.headers = ["Batch_ID", "R_Total", "R_Std", "KL_Div", "KL_Penalty", "R_GT", "R_Smooth", "R_Score", "R_Rot"]
+        self.headers = [
+            "Batch_ID", "R_Total", "R_Std", "KL_Div", "KL_Penalty",
+            "R_GT", "R_Smooth", "R_Score", "R_Rot",
+            "R_Total_Window", "R_GT_Window", "R_Smooth_Window",
+            "Weighted_GT", "Weighted_Smooth", "Acc_Mean", "Smooth_Floor_Penalty"
+        ]
         
         # 初始化 CSV
         file_exists = os.path.exists(self.csv_path)
+        if file_exists:
+            with open(self.csv_path, 'r', newline='') as f:
+                reader = csv.reader(f)
+                existing_header = next(reader, None)
+            if existing_header != self.headers:
+                self.csv_path = os.path.join(log_dir, "batch_metrics_v2.csv")
+                file_exists = os.path.exists(self.csv_path)
+                print(f"⚠️ Existing batch_metrics.csv has an old header; logging new metrics to {self.csv_path}")
+
         with open(self.csv_path, 'a' if file_exists else 'w', newline='') as f:
             writer = csv.writer(f)
             if not file_exists:
@@ -37,7 +51,14 @@ class BatchLogger:
             f"{metrics.get('r_gt', 0):.4f}",
             f"{metrics.get('r_smooth', 0):.4f}",
             f"{metrics.get('r_score', 0):.4f}",
-            f"{metrics.get('r_rot', 0):.4f}"
+            f"{metrics.get('r_rot', 0):.4f}",
+            f"{metrics.get('r_total_window', 0):.4f}",
+            f"{metrics.get('r_gt_window', 0):.4f}",
+            f"{metrics.get('r_smooth_window', 0):.4f}",
+            f"{metrics.get('weighted_gt', 0):.4f}",
+            f"{metrics.get('weighted_smooth', 0):.4f}",
+            f"{metrics.get('acc_mean', 0):.6f}",
+            f"{metrics.get('smooth_floor_penalty', 0):.4f}"
         ]
         with open(self.csv_path, 'a', newline='') as f:
             writer = csv.writer(f)
@@ -77,6 +98,8 @@ class BatchLogger:
             
             # 1. R_Total (Main Objective)
             ax1.plot(x, df['R_Total'], 'b-', label='Total Reward (Avg)', linewidth=2)
+            if 'R_Total_Window' in df.columns:
+                ax1.plot(x, df['R_Total_Window'], 'c--', label='Total Reward (Window)', linewidth=1.5)
             
             # 2. R_Std (Diversity)
             # 畫出 R_Total +- R_Std 的陰影區域 (如果 R_Std 存在)
@@ -121,6 +144,14 @@ class BatchLogger:
             ax3.plot(x, df['R_GT'], 'o-', label='R_GT (Ground Truth)', linewidth=2, markersize=4)
             ax3.plot(x, df['R_Smooth'], 's-', label='R_Smooth (Smoothness)', linewidth=2, markersize=4)
             ax3.plot(x, df['R_Score'], '^-', label='R_Score (FS Score)', linewidth=2, markersize=4)
+            if 'R_GT_Window' in df.columns:
+                ax3.plot(x, df['R_GT_Window'], 'o--', label='R_GT Window', linewidth=1.2, markersize=3, alpha=0.75)
+            if 'R_Smooth_Window' in df.columns:
+                ax3.plot(x, df['R_Smooth_Window'], 's--', label='R_Smooth Window', linewidth=1.2, markersize=3, alpha=0.75)
+            if 'Weighted_GT' in df.columns:
+                ax3.plot(x, df['Weighted_GT'], '-', label='Weighted GT', linewidth=1.2, alpha=0.7)
+            if 'Weighted_Smooth' in df.columns:
+                ax3.plot(x, df['Weighted_Smooth'], '-', label='Weighted Smooth', linewidth=1.2, alpha=0.7)
             
             # 只有当 R_RH 有值时才画
             # 只有當 R_Rot 有值時才畫
@@ -129,8 +160,18 @@ class BatchLogger:
             
             ax3.set_xlabel('Total Training Batches', fontsize=12)
             ax3.set_ylabel('Reward Value', fontsize=12)
-            ax3.legend(loc='best', fontsize=10)
             ax3.grid(True, alpha=0.3)
+
+            if 'Acc_Mean' in df.columns:
+                ax4 = ax3.twinx()
+                ax4.plot(x, df['Acc_Mean'], 'k:', label='Raw Acc Mean', linewidth=1.5)
+                ax4.set_ylabel('Acceleration Mean', color='k', fontsize=12)
+                ax4.tick_params(axis='y', labelcolor='k')
+                lines3, labels3 = ax3.get_legend_handles_labels()
+                lines4, labels4 = ax4.get_legend_handles_labels()
+                ax3.legend(lines3 + lines4, labels3 + labels4, loc='best', fontsize=9)
+            else:
+                ax3.legend(loc='best', fontsize=10)
             
             plt.title('Training Progress: Rewards', fontsize=14, fontweight='bold')
             plt.tight_layout()
@@ -158,7 +199,14 @@ class UnifiedRewardModel(nn.Module):
             self.fs_ckpt = config['rl'].get('fs_reward_ckpt', None)
             self.w_rot = float(config['rl'].get('w_rot', 0.0))
             self.rot_threshold = float(config['rl'].get('rot_threshold', 0.1)) # 圈數誤差容忍值 (0.1圈 = 36度)
-            print(f"🔧 Reward Weights: GT={self.w_gt}, Smooth={self.w_smooth}, Score={self.w_score}, Rot={self.w_rot}")
+            self.input_n = int(config.get('data', {}).get('input_n', 0))
+            self.smooth_floor = float(config['rl'].get('smooth_floor', 0.0))
+            self.smooth_floor_penalty = float(config['rl'].get('smooth_floor_penalty', 0.0))
+            print(
+                f"🔧 Reward Weights: GT={self.w_gt}, Smooth={self.w_smooth}, "
+                f"Score={self.w_score}, Rot={self.w_rot}, "
+                f"SmoothFloor={self.smooth_floor}, SmoothPenalty={self.smooth_floor_penalty}"
+            )
         else:
             self.w_gt = 1.0
             self.w_smooth = 0.5
@@ -166,6 +214,9 @@ class UnifiedRewardModel(nn.Module):
             self.fs_ckpt = None
             self.w_rot = 0.0
             self.rot_threshold = 0.1 
+            self.input_n = 0
+            self.smooth_floor = 0.0
+            self.smooth_floor_penalty = 0.0
 
         # 初始化 FS Reward Model
         self.fs_model = None
@@ -182,26 +233,66 @@ class UnifiedRewardModel(nn.Module):
             for p in self.fs_model.parameters():
                 p.requires_grad = False
 
-    def compute_gt_reward(self, samples, gt):
+    def _future_joint_mask(self, mask, samples):
+        """Return (B, 1, T, J, 1) mask for future/missing joints."""
+        B, _G, T, J, D = samples.shape
+        if mask is None:
+            future = torch.ones(B, 1, T, J, 1, device=samples.device, dtype=samples.dtype)
+            if self.input_n > 0:
+                future[:, :, :self.input_n] = 0.0
+            return future
+
+        mask = mask.to(samples.device).float()
+        if mask.dim() != 3:
+            raise ValueError(f"Expected mask with shape (B,T,K) or (B,K,T), got {mask.shape}")
+
+        if mask.shape[1] == T:
+            mask_btjd = mask.contiguous().view(B, T, J, D)
+        elif mask.shape[2] == T:
+            mask_btjd = mask.permute(0, 2, 1).contiguous().view(B, T, J, D)
+        else:
+            raise ValueError(f"Mask temporal dimension does not match samples: mask={mask.shape}, T={T}")
+
+        observed_joint = (mask_btjd.mean(dim=-1, keepdim=True) > 0.5).float()
+        return (1.0 - observed_joint).unsqueeze(1)
+
+    def compute_gt_reward(self, samples, gt, mask=None):
         """L2 Distance Reward (0~1)"""
         diff = samples - gt
-        dist = torch.norm(diff, dim=-1).mean(dim=(-1, -2))
+        dist_per_joint = torch.norm(diff, dim=-1)
+        future_mask = self._future_joint_mask(mask, samples).squeeze(-1)
+        denom = future_mask.sum(dim=(-1, -2)).clamp(min=1.0)
+        dist = (dist_per_joint * future_mask).sum(dim=(-1, -2)) / denom
         reward_gt = torch.exp(-1.0 * dist)
         # [Range Analysis]
         # Raw: [0, 1] (Exponential negative distance)
         # Weighted (w_gt=0.2): [0, 0.2] -> Very small contribution!
         return reward_gt
 
-    def compute_smoothness_reward(self, samples):
-        """Smoothness Reward (0~1)"""
-        vel = torch.diff(samples, dim=2) 
+    def compute_smoothness_reward(self, samples, mask=None, return_acc=False):
+        """Boundary + future acceleration reward (0~1)."""
+        if samples.shape[2] < 3:
+            reward = torch.ones(samples.shape[0], samples.shape[1], device=samples.device)
+            acc_mag = torch.zeros_like(reward)
+            return (reward, acc_mag) if return_acc else reward
+
+        vel = torch.diff(samples, dim=2)
         acc = torch.diff(vel, dim=2)
-        acc_mag = torch.norm(acc, dim=-1).mean(dim=(-1, -2))
+        acc_mag_per_joint = torch.norm(acc, dim=-1)
+
+        future_mask = self._future_joint_mask(mask, samples).squeeze(-1)[:, :, 2:, :]
+        if mask is None and self.input_n > 0:
+            start = max(self.input_n - 2, 0)
+            future_mask = torch.zeros_like(acc_mag_per_joint[:, :1])
+            future_mask[:, :, start:, :] = 1.0
+
+        denom = future_mask.sum(dim=(-1, -2)).clamp(min=1.0)
+        acc_mag = (acc_mag_per_joint * future_mask).sum(dim=(-1, -2)) / denom
         reward_smooth = torch.exp(-10 * acc_mag)
         # [Range Analysis]
         # Raw: [0, 1] (Exponential negative acceleration)
         # Weighted (w_smooth=1.0): [0, 1.0] -> Balanced.
-        return reward_smooth
+        return (reward_smooth, acc_mag) if return_acc else reward_smooth
 
     def compute_score_reward(self, samples):
         """計算動作分數"""
@@ -343,7 +434,7 @@ class UnifiedRewardModel(nn.Module):
         
         return reward
 
-    def forward(self, samples, gt_motion, text_emb=None):
+    def forward(self, samples, gt_motion, text_emb=None, mask=None):
         B, G, T, J, D = samples.shape
         
         if gt_motion.dim() == 4:
@@ -351,17 +442,20 @@ class UnifiedRewardModel(nn.Module):
         else:
             gt_expanded = gt_motion.view(B, 1, T, J, D)
 
-        r_gt = self.compute_gt_reward(samples, gt_expanded)
-        r_smooth = self.compute_smoothness_reward(samples)
+        r_gt = self.compute_gt_reward(samples, gt_expanded, mask=mask)
+        r_smooth, acc_mag = self.compute_smoothness_reward(samples, mask=mask, return_acc=True)
         r_score = self.compute_score_reward(samples) if self.w_score > 0 else torch.zeros_like(r_gt)
 
         r_rot = self.compute_rotation_reward(samples, gt_expanded) if self.w_rot > 0 else torch.zeros_like(r_gt)
+
+        smooth_floor_penalty = torch.relu(self.smooth_floor - r_smooth) * self.smooth_floor_penalty
         
         total_reward = (
             self.w_gt * r_gt + 
             self.w_smooth * r_smooth +
             self.w_score * r_score +
-            self.w_rot * r_rot
+            self.w_rot * r_rot -
+            smooth_floor_penalty
         )
         # [Total Reward Analysis]
         # Current Range: Approx [-50, 50] + [0, 1.2]
@@ -373,6 +467,10 @@ class UnifiedRewardModel(nn.Module):
             "r_smooth": r_smooth.mean().item(),
             "r_score": r_score.mean().item(),
             "r_rot": r_rot.mean().item(),
+            "weighted_gt": (self.w_gt * r_gt).mean().item(),
+            "weighted_smooth": (self.w_smooth * r_smooth).mean().item(),
+            "acc_mean": acc_mag.mean().item(),
+            "smooth_floor_penalty": smooth_floor_penalty.mean().item(),
             "total": total_reward.mean().item()
         }
         
@@ -391,10 +489,17 @@ class GRPOTrainer:
             self.lr = float(config['rl'].get('lr', 5e-6))
             self.epsilon = float(config['rl'].get('epsilon', 0.2))
             self.kl_coef = float(config['rl'].get('kl_coef', 0.05))
+            self.ppo_epochs = int(config['rl'].get('ppo_epochs', 2))
+            self.max_train_batches = config['rl'].get('max_train_batches', None)
         else:
             self.lr = 5e-6
             self.epsilon = 0.2
             self.kl_coef = 0.05
+            self.ppo_epochs = 2
+            self.max_train_batches = None
+
+        if self.max_train_batches is not None:
+            self.max_train_batches = int(self.max_train_batches)
 
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
         
@@ -444,8 +549,49 @@ class GRPOTrainer:
 
         for p in self.old_model.parameters(): p.requires_grad = False
         for p in self.ref_model.parameters(): p.requires_grad = False
+
+        self._load_fixed_ref_checkpoint()
         
         self.just_updated_ref = False
+
+    def _unwrap_model(self, model):
+        return model.module if isinstance(model, nn.DataParallel) else model
+
+    def _copy_model_state(self, src, dst):
+        self._unwrap_model(dst).load_state_dict(self._unwrap_model(src).state_dict())
+
+    def update_old_model(self):
+        self._copy_model_state(self.model, self.old_model)
+        self.old_model.eval()
+
+    def _load_fixed_ref_checkpoint(self):
+        if not self.config:
+            return
+
+        ref_ckpt = self.config.get('rl', {}).get('ref_ckpt') or self.config.get('pretrained_ckpt')
+        if not ref_ckpt:
+            return
+        if not os.path.exists(ref_ckpt):
+            print(f"⚠️ Fixed reference checkpoint not found, keeping initial ref_model: {ref_ckpt}")
+            return
+
+        print(f"📌 Loading fixed KL reference: {ref_ckpt}")
+        state_dict = torch.load(ref_ckpt, map_location=self.device)
+        if isinstance(state_dict, dict):
+            for key in ("state_dict", "model_state_dict", "model"):
+                if key in state_dict and isinstance(state_dict[key], dict):
+                    state_dict = state_dict[key]
+                    break
+
+        new_state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
+        target = self._unwrap_model(self.ref_model)
+        target.load_state_dict(new_state_dict, strict=False)
+        self.ref_model.eval()
+
+    @staticmethod
+    def _approx_kl_from_logps(policy_step_logps, ref_step_logps):
+        log_ref_policy = torch.clamp(ref_step_logps - policy_step_logps, min=-20.0, max=20.0)
+        return torch.exp(log_ref_policy) - log_ref_policy - 1.0
 
     def train_epoch(self, train_loader, diffusion_timesteps=50, G=16, 
                     epoch=None, checkpoint_dir=None, 
@@ -470,27 +616,37 @@ class GRPOTrainer:
         # Gradients will still flow because backprop_trajectory_loss handles it manually.
         self.model.eval()
         
-        epoch_metrics = {
-            "kl_penalty": [], "kl": [], 
-            "r_total": [], "r_std": [], # New main metrics
-            "r_gt": [], "r_smooth": [], "r_score": [], "r_rot": [] 
-        }
+        metric_keys = [
+            "kl_penalty", "kl", "r_total", "r_std",
+            "r_gt", "r_smooth", "r_score", "r_rot",
+            "weighted_gt", "weighted_smooth", "acc_mean", "smooth_floor_penalty"
+        ]
+        epoch_metrics = {key: [] for key in metric_keys}
+        window_metrics = {key: [] for key in metric_keys}
         
         progress = tqdm(train_loader, desc="RL Training")
+        if update_ref_every_batch is not None:
+            print("📌 Fixed reference mode: ignoring update_ref_every_batch; KL ref stays at base checkpoint.")
         
         for batch_idx, batch in enumerate(progress):
             batch = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
             
-            # ... (模型引擎獲取代碼保持不變) ...
-            model_engine = self.model.module if isinstance(self.model, nn.DataParallel) else self.model
-            old_engine = self.old_model.module if isinstance(self.old_model, nn.DataParallel) else self.old_model
-            ref_engine = self.ref_model.module if isinstance(self.ref_model, nn.DataParallel) else self.ref_model
+            model_engine = self._unwrap_model(self.model)
+            old_engine = self._unwrap_model(self.old_model)
+            ref_engine = self._unwrap_model(self.ref_model)
 
             text_emb = self.text_encoder(batch["motion_name"])
+            self.update_old_model()
+            for engine in (model_engine, old_engine, ref_engine):
+                if hasattr(engine, "sampling_std"):
+                    engine.sampling_std = float(current_std)
 
-            # 1. Trajectory Generation (Pass 1: Inference / No Grad)
             with torch.no_grad():
-                final_samples, total_log_probs, all_latents, all_routing = model_engine.sample_trajectory(text_emb, batch, G)
+                # 1. Rollout from the frozen old policy for PPO ratios.
+                final_samples, _total_log_probs, old_step_log_probs, all_latents, all_routing = old_engine.sample_trajectory(
+                    text_emb, batch, G, return_step_log_probs=True
+                )
+                old_step_log_probs = old_step_log_probs.detach()
 
                 # 2. Reward Calculation
                 # [Fix] 必須將 Epsilon 轉回 x0 (Action) 才能算 Reward -> sample_trajectory 已經回傳 x0 (final_samples)
@@ -507,104 +663,92 @@ class GRPOTrainer:
                 if pose_gt.dim() == 3:
                     pose_gt = pose_gt.view(B, L, J, 3) # Assuming T=L
                 
-                rewards, metrics = self.reward_model(final_samples_reshaped, pose_gt)
+                rewards, metrics = self.reward_model(final_samples_reshaped, pose_gt, mask=batch.get("mask"))
                 
-                # 3. Policy Loss Prep (KL & Advantage)
-                log_prob_old = total_log_probs
-                
-                # Calculate Policy Log Prob (Already in Eval Mode)
-                log_prob_old_eval = model_engine.get_trajectory_log_prob(all_latents, text_emb, batch)
-
-                # Ref Model is already in Eval Mode
-                log_prob_ref = ref_engine.get_trajectory_log_prob(all_latents, text_emb, batch)
-                
-                # KL = Policy(Eval) - Ref(Eval)
-                # This ensures KL is close to 0 initially
-                kl = log_prob_old_eval - log_prob_ref # (B, G)
-                
-                # [Mod] KL Punishment with Hard Clipping
-                # 計算原始懲罰值
-                kl_penalty = self.kl_coef * kl
-                
-                # 如果設定了 max_kl_penalty，則將懲罰值限制在該範圍內
-                # 例如 max_kl_penalty=5.0，則即使 KL=200 (*0.05=penalty=10)，也只扣 5 分
-                # 這能防止 KL 過大時懲罰項完全蓋過 Reward
+                # 3. Fixed-reference KL and group-relative advantage.
+                ref_step_log_probs = ref_engine.get_trajectory_step_log_probs(all_latents, text_emb, batch).detach()
+                approx_kl = self._approx_kl_from_logps(old_step_log_probs, ref_step_log_probs)
+                kl_penalty = self.kl_coef * approx_kl
                 if max_kl_penalty is not None:
                     kl_penalty = torch.clamp(kl_penalty, max=max_kl_penalty)
 
-                # [Scheme B: DeepSeek Style]
-                # 1. Normalize Pure Task Rewards first (Relative Performance)
                 mean_r = rewards.mean(dim=1, keepdim=True)
-                std_r = rewards.std(dim=1, keepdim=True)
+                std_r = rewards.std(dim=1, keepdim=True, unbiased=False)
                 advantages_task = (rewards - mean_r) / (std_r + 1e-8)
-                
-                # [Explained] Adv_Task is always 0 mean because of Normalization.
-                # This is normal for GRPO (Group Relative).
-                # To track performance, watch 'R_Total' (Unnormalized Reward).
-                
-                # 2. Subtract Absolute KL Penalty (Direct Regularization)
-                # advantages = (R - mean)/std - beta * KL
-                # This treats KL as a hard constraint regardless of reward scale
-                advantages = advantages_task - kl_penalty.detach()
-                
-                # Logging Metrics (Approx)
-                kl_div = kl.mean()
-                r_total_mean = rewards.mean().item()
-                r_std_mean = rewards.std().item() # Whole batch std (approx diversity)
-                # grpo_loss = -(advantages * log_prob_old).mean() # Unused meaningless scalar
-                # loss = grpo_loss + kl_div # Unused
+                advantages = advantages_task.detach()
 
-            # 4. Backward (Pass 2: Training / Grad)
-            # Memory Efficient: Re-compute gradients stepwise
-            # R3: all_routing 會讓每步 replay 推理時的 MoE routing
-            self.optimizer.zero_grad()
-            model_engine.backprop_trajectory_loss(all_latents, text_emb, batch, advantages,
-                                                  all_routing=all_routing)
-            
-            # [Debug] 梯度檢查
-            if batch_idx % 50 == 0:
-                grad_norm = 0.0
-                has_grad = False
-                for name, p in self.model.named_parameters():
-                    if p.grad is not None:
-                        param_norm = p.grad.data.norm(2)
-                        grad_norm += param_norm.item() ** 2
-                        has_grad = True
-                grad_norm = grad_norm ** 0.5
-                #print(f"   [Step {batch_idx}] Grad Norm: {grad_norm:.6f}")
+                kl_div = approx_kl.mean()
+                r_total_mean = rewards.mean().item()
+                r_std_mean = rewards.std(unbiased=False).item() # Whole batch std (approx diversity)
+
+            # 4. PPO updates on the same detached rollout.
+            for ppo_epoch in range(self.ppo_epochs):
+                self.optimizer.zero_grad()
+                model_engine.backprop_trajectory_loss(
+                    all_latents,
+                    text_emb,
+                    batch,
+                    advantages,
+                    old_step_log_probs=old_step_log_probs,
+                    ref_step_log_probs=ref_step_log_probs,
+                    epsilon=self.epsilon,
+                    kl_coef=self.kl_coef,
+                    max_kl_penalty=max_kl_penalty,
+                    all_routing=all_routing,
+                )
                 
-                if not has_grad or grad_norm == 0:
-                    print("   🔴 CRITICAL: Gradient is ZERO! Check connection graph.")
+                # [Debug] 梯度檢查
+                if batch_idx % 50 == 0 and ppo_epoch == 0:
+                    grad_norm = 0.0
+                    has_grad = False
+                    for name, p in self.model.named_parameters():
+                        if p.grad is not None:
+                            param_norm = p.grad.data.norm(2)
+                            grad_norm += param_norm.item() ** 2
+                            has_grad = True
+                    grad_norm = grad_norm ** 0.5
+                    
+                    if not has_grad or grad_norm == 0:
+                        print("   🔴 CRITICAL: Gradient is ZERO! Check connection graph.")
+                
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                self.optimizer.step()
             
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-            self.optimizer.step()
-            
-            # [New] Step Scheduler
+            # [New] Step Scheduler: keep one scheduler step per rollout batch.
             if self.scheduler:
                 self.scheduler.step()
 
             # Logging ...
             # epoch_metrics["policy_loss"].append(loss.item())
             # epoch_metrics["adv_task"].append(advantages_task.mean().item()) # Always 0
-            epoch_metrics["kl_penalty"].append(kl_penalty.mean().item())
-            # epoch_metrics["adv_total"].append(advantages.mean().item())     # Just -KL
-            
-            epoch_metrics["kl"].append(kl_div.item())
-            epoch_metrics["r_total"].append(r_total_mean)
-            epoch_metrics["r_std"].append(r_std_mean)
-            
-            epoch_metrics["r_gt"].append(metrics["r_gt"])
-            epoch_metrics["r_smooth"].append(metrics["r_smooth"])
-            epoch_metrics["r_score"].append(metrics.get("r_score", 0.0))
-            epoch_metrics["r_rot"].append(metrics.get("r_rot", 0.0))
+            batch_metrics = {
+                "kl_penalty": kl_penalty.mean().item(),
+                "kl": kl_div.item(),
+                "r_total": r_total_mean,
+                "r_std": r_std_mean,
+                "r_gt": metrics["r_gt"],
+                "r_smooth": metrics["r_smooth"],
+                "r_score": metrics.get("r_score", 0.0),
+                "r_rot": metrics.get("r_rot", 0.0),
+                "weighted_gt": metrics.get("weighted_gt", 0.0),
+                "weighted_smooth": metrics.get("weighted_smooth", 0.0),
+                "acc_mean": metrics.get("acc_mean", 0.0),
+                "smooth_floor_penalty": metrics.get("smooth_floor_penalty", 0.0),
+            }
+            for key, value in batch_metrics.items():
+                epoch_metrics[key].append(value)
+                window_metrics[key].append(value)
 
             if batch_idx % 5 == 0:
                 # [Mod] Dynamic Tqdm Postfix based on Reward Weights
                 # Show Total Reward (Real Performance) instead of Adv
                 postfix_dict = {
                     "Tot": f"{r_total_mean:.3f}", 
-                    "Std": f"{r_std_mean:.3f}"
+                    "Std": f"{r_std_mean:.3f}",
+                    "Acc": f"{metrics.get('acc_mean', 0.0):.4f}"
                 }
+                if metrics.get("smooth_floor_penalty", 0.0) > 0:
+                    postfix_dict["SmPen"] = f"{metrics['smooth_floor_penalty']:.3f}"
                 
                 # Definite metrics
                 metrics_map = {
@@ -632,16 +776,8 @@ class GRPOTrainer:
                 
                 progress.set_postfix(postfix_dict)
             
-            # ===== [New] Reference Model Periodic Update (Batch-based) =====
-            # 根據 batch 數進行 Reference Model 的更新
-            # 這能定期重置 KL 散度，讓模型基於新的能力繼續優化，避免 KL 累積過大導致崩潰
-            # 類似於 Curriculum Learning 或 Iterative RL
-            if update_ref_every_batch is not None and (batch_idx + 1) % update_ref_every_batch == 0:
-                self.update_ref_model()
-                print(f"\n🔄 [Batch {batch_idx + 1 + batch_offset}] Reference model updated! KL Reset.")
-                
-                # [Mod] Don't clear immediately. Flag it to clear AFTER logging.
-                self.just_updated_ref = True
+            # Fixed-reference KL: do not periodically move ref_model toward the
+            # current policy, otherwise drift becomes the new baseline.
 
             # ===== Checkpoint Saving =====
             if save_checkpoint_every is not None and (batch_idx + 1) % save_checkpoint_every == 0:
@@ -668,17 +804,27 @@ class GRPOTrainer:
             
             if (batch_idx + 1) % log_every == 0:
                 current_avg_metrics = {k: np.mean(v) if v else 0.0 for k, v in epoch_metrics.items()}
+                window_avg_metrics = {k: np.mean(v) if v else 0.0 for k, v in window_metrics.items()}
                 # Keep running-mean metrics, but log KL terms as current batch values.
                 current_log_metrics = dict(current_avg_metrics)
                 if epoch_metrics["kl"]:
                     current_log_metrics["kl"] = epoch_metrics["kl"][-1]
                 if epoch_metrics["kl_penalty"]:
                     current_log_metrics["kl_penalty"] = epoch_metrics["kl_penalty"][-1]
+                current_log_metrics["r_total_window"] = window_avg_metrics["r_total"]
+                current_log_metrics["r_gt_window"] = window_avg_metrics["r_gt"]
+                current_log_metrics["r_smooth_window"] = window_avg_metrics["r_smooth"]
+                current_log_metrics["weighted_gt"] = window_avg_metrics["weighted_gt"]
+                current_log_metrics["weighted_smooth"] = window_avg_metrics["weighted_smooth"]
+                current_log_metrics["acc_mean"] = window_avg_metrics["acc_mean"]
+                current_log_metrics["smooth_floor_penalty"] = window_avg_metrics["smooth_floor_penalty"]
                 
                 if hasattr(self, 'batch_logger'):
                     actual_batch = batch_idx + 1 + batch_offset
                     batch_id = f"E{epoch}_B{actual_batch}"
                     self.batch_logger.log_batch(batch_id, current_log_metrics)
+                    for key in window_metrics:
+                        window_metrics[key] = []
                     
                     # [Mod] Clear metrics ONLY if Ref Model was just updated.
                     # This resets the accumulation cycle (e.g., at Batch 3000).
@@ -712,6 +858,10 @@ class GRPOTrainer:
                         traceback.print_exc()
                         print(f"   ❌ Visualization failed: {e}")
                         # self.model.train()  # 確保恢復訓練模式 -> Keep Eval
+
+            if self.max_train_batches is not None and (batch_idx + 1) >= self.max_train_batches:
+                print(f"\n⏹️ Reached max_train_batches={self.max_train_batches}; ending this short RL run.")
+                break
 
         avg_metrics = {k: np.mean(v) for k, v in epoch_metrics.items()} if epoch_metrics["r_total"] else {}
         return avg_metrics

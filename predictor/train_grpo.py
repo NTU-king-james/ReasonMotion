@@ -269,7 +269,13 @@ def main():
 
         
         if metrics:
-            print(f"📊 Metrics: R_Tot={metrics['r_total']:.4f} | R_Std={metrics['r_std']:.4f} | R_GT={metrics['r_gt']:.4f} | R_Sm={metrics['r_smooth']:.4f} | KL={metrics['kl']:.4f} | R_score={metrics['r_score']:.4f}")
+            print(
+                f"📊 Metrics: R_Tot={metrics['r_total']:.4f} | R_Std={metrics['r_std']:.4f} | "
+                f"R_GT={metrics['r_gt']:.4f} | R_Sm={metrics['r_smooth']:.4f} | "
+                f"Acc={metrics.get('acc_mean', 0.0):.6f} | "
+                f"SmPen={metrics.get('smooth_floor_penalty', 0.0):.4f} | "
+                f"KL={metrics['kl']:.4f} | R_score={metrics['r_score']:.4f}"
+            )
         else:
             print("📊 Metrics: None (No training steps this epoch?)")
         

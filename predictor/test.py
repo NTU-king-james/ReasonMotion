@@ -270,7 +270,6 @@ def build_h36m_multimodal_gt(dataset, threshold):
     print(f"multi-GT ready: valid multi-modal samples={valid}/{n}")
     return multimodal_traj
 
-
 @torch.no_grad()
 def evaluate_with_multimodal_gt(model, dataloader, config, device, nsample, multimodal_traj):
     """Evaluate metrics with true multi-GT (MMADE/MMFDE skip n_gts==1 as NaN)."""

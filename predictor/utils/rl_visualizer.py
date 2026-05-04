@@ -145,6 +145,9 @@ class RLVisualizer:
             return
 
         print(f"[RLVisualizer] Generating visualization for Epoch {epoch} (Mode: {self.viz_mode})...")
+        model_engine = model.module if hasattr(model, "module") else model
+        if hasattr(model_engine, "sampling_std"):
+            model_engine.sampling_std = float(current_std)
         
         # [OOM Fix] Offload Reward Model to CPU to free up VRAM for Generation
         # We must restore it to GPU at the end.
@@ -360,7 +363,7 @@ class RLVisualizer:
         # 1. Generate Variants (G paths from same x_T)
         # final_samples: (1, G, K, L)
         # text_cond is already a tuple (tok_emb, tok_mask), pass it directly
-        final_samples, _, _ = model.sample_trajectory(text_cond, feed, G=num_variants)
+        final_samples, _, _, _ = model.sample_trajectory(text_cond, feed, G=num_variants)
         variants = final_samples[0] # (G, K, L)
         
         # 2. Render（传入 variants，render 函数会根据 reward 排序并上色）
