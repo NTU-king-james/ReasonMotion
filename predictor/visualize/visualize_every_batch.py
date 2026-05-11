@@ -56,11 +56,11 @@ python visualize_every_batch.py \
 
 CUDA_VISIBLE_DEVICES=5 python visualize_every_batch.py \
     --mode h36m \
-    --run_dir "/home/kingjames23/ReasonMotion-project/ReasonMotion/predictor/runs/0503_moe_rl_h36m_smooth_guard" \
+    --run_dir "/home/kingjames23/ReasonMotion-project/ReasonMotion/predictor/runs/0507_h36m_fairscale_rl_with_smooth" \
     --data_dir "/home/allen/datasets" \
-    --sample_idx 164 \
+    --sample_idx 2876 \
     --batch_start 0 \
-    --batch_end 600 \
+    --batch_end 1000 \
     --step 200 \
     --seed 123
 """

@@ -114,11 +114,11 @@ class H36MUnified(Dataset):
             # CoMusion Setting
             split_subjects = [[1, 5, 6, 7, 8], [11], [9, 11]]
             # AuxFormer Setting
-            split_subjects = [[1, 9, 6, 7, 8], [11], [5]]
+            # split_subjects = [[1, 9, 6, 7, 8], [11], [5]]
         else:
             split_subjects = [[1, 5, 6, 7, 8], [11], [9, 11]]
             # AuxFormer Setting
-            split_subjects = [[1, 6, 7, 8, 9], [11], [5]]
+            # split_subjects = [[1, 6, 7, 8, 9], [11], [5]]
 
         self.subjects = split_subjects[split]
         self.actions = actions or [
@@ -137,13 +137,37 @@ class H36MUnified(Dataset):
         self._build_index()
 
         if self.data_ratio < 1.0:
-            keep = int(len(self.data_idx) * self.data_ratio)
-            self.data_idx = self.data_idx[:keep]
+            self._apply_data_ratio()
 
         print(
             f"[H36MUnified] protocol={self.protocol} split={self.split} "
             f"downsample={self.downsample} pad_short={self.pad_short_sequences} "
             f"sequences={len(self.motion_labels)} windows={len(self.data_idx)}"
+        )
+
+    def _apply_data_ratio(self):
+        """Subsample windows per sequence key to preserve eval distribution."""
+        grouped: Dict[int, List[Tuple[int, int]]] = {}
+        for item in self.data_idx:
+            key, _start = item
+            grouped.setdefault(key, []).append(item)
+
+        rng = np.random.RandomState(1234567890)
+        sampled_idx: List[Tuple[int, int]] = []
+        original_count = len(self.data_idx)
+
+        for key in sorted(grouped.keys()):
+            items = grouped[key]
+            keep = max(1, int(round(len(items) * self.data_ratio)))
+            keep = min(keep, len(items))
+            selected = rng.choice(len(items), size=keep, replace=False)
+            selected.sort()
+            sampled_idx.extend(items[i] for i in selected)
+
+        self.data_idx = sampled_idx
+        print(
+            f"[H36MUnified] data_ratio={self.data_ratio} "
+            f"kept {len(self.data_idx)}/{original_count} windows with per-sequence sampling"
         )
 
     def _read_xyz(self, fpath: str) -> Optional[np.ndarray]:

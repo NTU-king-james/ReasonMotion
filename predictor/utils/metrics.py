@@ -280,11 +280,35 @@ def fmpjpe(batch_pred, batch_gt, target_dim):
     # Average over batch
     return best_error.mean() * 1000
 
+
+def root_relative_without_root(batch_pose, root_idx=0):
+    """Convert (B, N, K, T) pose to root-relative joints and drop root joint."""
+    B, N, K, T = batch_pose.shape
+    if K % 3 != 0:
+        raise ValueError(f"Pose dimension K must be divisible by 3, got {K}")
+
+    joint_count = K // 3
+    if joint_count <= 1:
+        raise ValueError("Need at least 2 joints to remove root and evaluate relative pose.")
+    if root_idx < 0 or root_idx >= joint_count:
+        raise ValueError(f"root_idx {root_idx} is out of range for {joint_count} joints.")
+
+    pose = batch_pose.transpose(-1, -2).reshape(B, N, T, joint_count, 3)
+    root = pose[..., root_idx:root_idx + 1, :]
+    rel_pose = pose - root
+
+    keep_joints = torch.ones(joint_count, dtype=torch.bool, device=batch_pose.device)
+    keep_joints[root_idx] = False
+    rel_pose = rel_pose[..., keep_joints, :]
+    return rel_pose.reshape(B, N, T, (joint_count - 1) * 3).transpose(-1, -2).contiguous()
+
+
 class MetricsEvaluator:
     def __init__(self, config, device='cuda'):
         self.device = device
         self.target_dim = config['model']['target_dim'] if 'target_dim' in config['model'] else 72
         self.input_n = config['data'].get('input_n', 0)
+        self.root_idx = config['data'].get('root_joint_idx', config['data'].get('root_idx', 0))
         data_name = config['data'].get('name', 'FineFS').lower()
         default_fps = 25 if data_name == 'h36m' else 30
         self.fps = config['data'].get('fps', default_fps)
@@ -301,19 +325,21 @@ class MetricsEvaluator:
 
         Returns:
             dict: A dictionary containing the computed metrics:
-                - "AMPJPE": A-MPJPE in mm.
-                - "FMPJPE": F-MPJPE in mm.
-                - "ADE": Best-of-N average displacement error.
-                - "FDE": Best-of-N final displacement error.
-                - "MMADE": Multi-modal ADE (computed only when nsample > 1).
-                - "MMFDE": Multi-modal FDE (computed only when nsample > 1).
-                - "Diversity": Mean pairwise distance among generated samples.
+                - "AMPJPE"/"FMPJPE": Absolute A/F-MPJPE in mm.
+                - "ADE"/"FDE": Absolute GSPS-style best-of-N displacement error.
+                - "MMADE"/"MMFDE": Absolute multi-modal metrics, when nsample > 1.
+                - "Diversity": Absolute mean pairwise distance among generated samples.
+                - "R_*": Root-relative versions of the same metrics, with root joint removed.
         """
         model.eval()
         amp_total, fmp_total = 0.0, 0.0
         ade_total, fde_total = 0.0, 0.0
         mmade_total, mmfde_total = 0.0, 0.0
         diversity_total = 0.0
+        r_amp_total, r_fmp_total = 0.0, 0.0
+        r_ade_total, r_fde_total = 0.0, 0.0
+        r_mmade_total, r_mmfde_total = 0.0, 0.0
+        r_diversity_total = 0.0
         n_sequences = 0
 
         with torch.no_grad():
@@ -327,38 +353,52 @@ class MetricsEvaluator:
                     gt = gt.expand_as(samples)
 
                     # Only evaluate predicted frames (input_n:)
-                    p_part, g_part = samples[..., self.input_n:], gt[..., self.input_n:]
-                    # print(p_part.shape, g_part.shape)
-                    # exit(0)
+                    p_abs, g_abs = samples[..., self.input_n:], gt[..., self.input_n:]
+                    p_rel = root_relative_without_root(p_abs, root_idx=self.root_idx)
+                    g_rel = root_relative_without_root(g_abs, root_idx=self.root_idx)
 
                     # Batch-level A/F-MPJPE (mm)
-                    batch_size = p_part.shape[0]
-                    amp_total += float(ampjpe(p_part, g_part, self.target_dim).item()) * batch_size
-                    fmp_total += float(fmpjpe(p_part, g_part, self.target_dim).item()) * batch_size
+                    batch_size = p_abs.shape[0]
+                    amp_total += float(ampjpe(p_abs, g_abs, p_abs.shape[2]).item()) * batch_size
+                    fmp_total += float(fmpjpe(p_abs, g_abs, p_abs.shape[2]).item()) * batch_size
+                    r_amp_total += float(ampjpe(p_rel, g_rel, p_rel.shape[2]).item()) * batch_size
+                    r_fmp_total += float(fmpjpe(p_rel, g_rel, p_rel.shape[2]).item()) * batch_size
 
-                    pred_np = p_part.cpu().numpy().transpose(0, 1, 3, 2)  # (B, N, T, K)
-                    gt_np = g_part.cpu().numpy().transpose(0, 1, 3, 2)     # (B, N, T, K)
+                    pred_abs_np = p_abs.cpu().numpy().transpose(0, 1, 3, 2)  # (B, N, T, K)
+                    gt_abs_np = g_abs.cpu().numpy().transpose(0, 1, 3, 2)     # (B, N, T, K)
+                    pred_rel_np = p_rel.cpu().numpy().transpose(0, 1, 3, 2)
+                    gt_rel_np = g_rel.cpu().numpy().transpose(0, 1, 3, 2)
 
-                    for b in range(pred_np.shape[0]):
-                        pred_b = pred_np[b]   # (N, T, K)
-                        gt_b = gt_np[b, 0]    # (T, K)
+                    for b in range(pred_abs_np.shape[0]):
+                        pred_b = pred_abs_np[b]   # (N, T, K)
+                        gt_b = gt_abs_np[b, 0]    # (T, K)
+                        pred_rel_b = pred_rel_np[b]
+                        gt_rel_b = gt_rel_np[b, 0]
 
                         ade_total += float(compute_ade(pred_b, gt_b))
                         fde_total += float(compute_fde(pred_b, gt_b))
+                        r_ade_total += float(compute_ade(pred_rel_b, gt_rel_b))
+                        r_fde_total += float(compute_fde(pred_rel_b, gt_rel_b))
 
                         if nsample > 1:
                             # If multi-modal GT is unavailable in batch, fallback to single GT.
                             gt_multi = [gt_b]
+                            gt_rel_multi = [gt_rel_b]
                             mmade_total += float(compute_mmade(pred_b, gt_b, gt_multi))
                             mmfde_total += float(compute_mmfde(pred_b, gt_b, gt_multi))
+                            r_mmade_total += float(compute_mmade(pred_rel_b, gt_rel_b, gt_rel_multi))
+                            r_mmfde_total += float(compute_mmfde(pred_rel_b, gt_rel_b, gt_rel_multi))
 
                         diversity_total += float(compute_diversity(pred_b))
+                        r_diversity_total += float(compute_diversity(pred_rel_b))
                         n_sequences += 1
                 except Exception: continue
 
         denom = max(1, n_sequences)
         mmade_avg = (mmade_total / denom) if nsample > 1 else None
         mmfde_avg = (mmfde_total / denom) if nsample > 1 else None
+        r_mmade_avg = (r_mmade_total / denom) if nsample > 1 else None
+        r_mmfde_avg = (r_mmfde_total / denom) if nsample > 1 else None
         return {
             "AMPJPE": amp_total / denom,
             "FMPJPE": fmp_total / denom,
@@ -367,4 +407,11 @@ class MetricsEvaluator:
             "MMADE": mmade_avg,
             "MMFDE": mmfde_avg,
             "Diversity": diversity_total / denom,
+            "R_AMPJPE": r_amp_total / denom,
+            "R_FMPJPE": r_fmp_total / denom,
+            "R_ADE": r_ade_total / denom,
+            "R_FDE": r_fde_total / denom,
+            "R_MMADE": r_mmade_avg,
+            "R_MMFDE": r_mmfde_avg,
+            "R_Diversity": r_diversity_total / denom,
         }

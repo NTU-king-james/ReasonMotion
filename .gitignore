@@ -4,3 +4,5 @@ note.md
 CoMusion
 DePOSit
 TransFusion
+predictor/__pycache__/
+*.pyc

@@ -205,33 +205,33 @@ def train(model, config, train_loader, valid_loader=None, valid_epoch_interval=1
         r_count = 0
         
         with torch.no_grad():
-             loader_to_test = valid_loader if valid_loader else train_loader
-             # We want to iterate, but not exhaust if it's an iterator. 
-             # Loaders are usually iterators but we can restart them.
-             for i, rb_batch in enumerate(loader_to_test):
-                 if i >= 20: break # Check 20 batches
+            loader_to_test = valid_loader if valid_loader else train_loader
+            # We want to iterate, but not exhaust if it's an iterator. 
+            # Loaders are usually iterators but we can restart them.
+            for i, rb_batch in enumerate(loader_to_test):
+                if i >= 20: break # Check 20 batches
                  
-                 rb_tok, rb_mask = text_encoder(rb_batch["motion_name"])
-                 rb_main = model(rb_batch, text_embedding=(rb_tok, rb_mask)).mean().item()
+                rb_tok, rb_mask = text_encoder(rb_batch["motion_name"])
+                rb_main = model(rb_batch, text_embedding=(rb_tok, rb_mask)).mean().item()
                  
-                 # 1. Shuffle
-                 idx = torch.randperm(rb_tok.size(0), device=rb_tok.device)
-                 rb_shuf = model(rb_batch, text_embedding=(rb_tok[idx], rb_mask[idx])).mean().item()
+                # 1. Shuffle
+                idx = torch.randperm(rb_tok.size(0), device=rb_tok.device)
+                rb_shuf = model(rb_batch, text_embedding=(rb_tok[idx], rb_mask[idx])).mean().item()
                  
-                 # 2. Pure Zero (100% drop)
-                 rb_zero_tok = torch.zeros_like(rb_tok)
-                 rb_zero = model(rb_batch, text_embedding=(rb_zero_tok, rb_mask)).mean().item()
+                # 2. Pure Zero (100% drop)
+                rb_zero_tok = torch.zeros_like(rb_tok)
+                rb_zero = model(rb_batch, text_embedding=(rb_zero_tok, rb_mask)).mean().item()
                  
-                 # Ratios for this batch
-                 r_shuf_sum += (rb_shuf / (rb_main + 1e-9))
-                 r_zero_sum += (rb_zero / (rb_main + 1e-9))
-                 r_count += 1
+                # Ratios for this batch
+                r_shuf_sum += (rb_shuf / (rb_main + 1e-9))
+                r_zero_sum += (rb_zero / (rb_main + 1e-9))
+                r_count += 1
              
-             ratio_shuf = r_shuf_sum / max(1, r_count)
-             ratio_zero = r_zero_sum / max(1, r_count)
-             guidance_score = ratio_zero - 1.0
+            ratio_shuf = r_shuf_sum / max(1, r_count)
+            ratio_zero = r_zero_sum / max(1, r_count)
+            guidance_score = ratio_zero - 1.0
              
-             print(f" [Robustness] (avg 20 batches) rShuf: {ratio_shuf:.2f}, rZero: {ratio_zero:.2f}")
+            print(f" [Robustness] (avg 20 batches) rShuf: {ratio_shuf:.2f}, rZero: {ratio_zero:.2f}")
 
         if tb_writer:
             tb_writer.add_scalar("epoch/train_loss", avg_train, epoch)

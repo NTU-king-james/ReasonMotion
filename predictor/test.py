@@ -34,6 +34,7 @@ from utils.metrics import (
     compute_mmade,
     compute_mmfde,
     compute_diversity,
+    root_relative_without_root,
 )
 from utils.text_encoder import TextEncoder
 from tqdm import tqdm
@@ -270,23 +271,52 @@ def build_h36m_multimodal_gt(dataset, threshold):
     print(f"multi-GT ready: valid multi-modal samples={valid}/{n}")
     return multimodal_traj
 
+
+def root_relative_multigt(gt_multi, root_idx=0):
+    """Convert multi-GT trajectories (M, T, K) to root-relative pose without root joint."""
+    gt_multi = np.asarray(gt_multi)
+    if gt_multi.ndim != 3:
+        raise ValueError(f"Expected gt_multi shape (M, T, K), got {gt_multi.shape}")
+
+    n_gt, seq_len, pose_dim = gt_multi.shape
+    if pose_dim % 3 != 0:
+        raise ValueError(f"Pose dimension K must be divisible by 3, got {pose_dim}")
+
+    joint_count = pose_dim // 3
+    if joint_count <= 1:
+        raise ValueError("Need at least 2 joints to remove root and evaluate relative pose.")
+    if root_idx < 0 or root_idx >= joint_count:
+        raise ValueError(f"root_idx {root_idx} is out of range for {joint_count} joints.")
+
+    pose = gt_multi.reshape(n_gt, seq_len, joint_count, 3)
+    rel_pose = pose - pose[:, :, root_idx:root_idx + 1, :]
+    keep_joints = np.ones(joint_count, dtype=bool)
+    keep_joints[root_idx] = False
+    return rel_pose[:, :, keep_joints, :].reshape(n_gt, seq_len, (joint_count - 1) * 3)
+
+
 @torch.no_grad()
 def evaluate_with_multimodal_gt(model, dataloader, config, device, nsample, multimodal_traj):
     """Evaluate metrics with true multi-GT (MMADE/MMFDE skip n_gts==1 as NaN)."""
     model.eval()
-    target_dim = config['model'].get('target_dim', 72)
     input_n = config['data'].get('input_n', 0)
+    root_idx = config['data'].get('root_joint_idx', config['data'].get('root_idx', 0))
     text_encoder = TextEncoder(device=str(device))
 
     amp_total, fmp_total = 0.0, 0.0
     ade_total, fde_total = 0.0, 0.0
+    r_ade_total, r_fde_total = 0.0, 0.0
     diversity_total = 0.0
     mmade_vals, mmfde_vals = [], []
+    r_mmade_vals, r_mmfde_vals = [], []
     mm_valid_count = 0
     mmade_running_sum, mmfde_running_sum = 0.0, 0.0
+    r_mmade_running_sum, r_mmfde_running_sum = 0.0, 0.0
     n_sequences = 0
+    failed_batches = 0
+    first_error = None
 
-    pbar = tqdm(dataloader, desc="Evaluating (multi-GT)")
+    pbar = tqdm(dataloader, desc="Evaluating (multi-GT)", dynamic_ncols=True)
     for batch in pbar:
         batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
         t_emb = text_encoder(batch.get("motion_name"))
@@ -298,12 +328,18 @@ def evaluate_with_multimodal_gt(model, dataloader, config, device, nsample, mult
             gt = gt.expand_as(samples)
 
             p_part, g_part = samples[..., input_n:], gt[..., input_n:]
+            p_rel = root_relative_without_root(p_part, root_idx=root_idx)
+            g_rel = root_relative_without_root(g_part, root_idx=root_idx)
+
             batch_size = p_part.shape[0]
-            amp_total += float(ampjpe(p_part, g_part, target_dim).item()) * batch_size
-            fmp_total += float(fmpjpe(p_part, g_part, target_dim).item()) * batch_size
+            pose_dim = p_part.shape[2]
+            amp_total += float(ampjpe(p_part, g_part, pose_dim).item()) * batch_size
+            fmp_total += float(fmpjpe(p_part, g_part, pose_dim).item()) * batch_size
 
             pred_np = p_part.cpu().numpy().transpose(0, 1, 3, 2)  # (B, N, T, K)
             gt_np = g_part.cpu().numpy().transpose(0, 1, 3, 2)    # (B, N, T, K)
+            pred_rel_np = p_rel.cpu().numpy().transpose(0, 1, 3, 2)
+            gt_rel_np = g_rel.cpu().numpy().transpose(0, 1, 3, 2)
 
             sample_indices = batch["sample_idx"]
             if isinstance(sample_indices, torch.Tensor):
@@ -312,10 +348,14 @@ def evaluate_with_multimodal_gt(model, dataloader, config, device, nsample, mult
             for b in range(pred_np.shape[0]):
                 pred_b = pred_np[b]
                 gt_b = gt_np[b, 0]
+                pred_rel_b = pred_rel_np[b]
+                gt_rel_b = gt_rel_np[b, 0]
                 sample_idx = int(sample_indices[b])
 
                 ade_total += float(compute_ade(pred_b, gt_b))
                 fde_total += float(compute_fde(pred_b, gt_b))
+                r_ade_total += float(compute_ade(pred_rel_b, gt_rel_b))
+                r_fde_total += float(compute_fde(pred_rel_b, gt_rel_b))
                 diversity_total += float(compute_diversity(pred_b))
 
                 if nsample > 1:
@@ -323,35 +363,64 @@ def evaluate_with_multimodal_gt(model, dataloader, config, device, nsample, mult
                     if gt_multi.shape[0] <= 1:
                         mmade_vals.append(np.nan)
                         mmfde_vals.append(np.nan)
+                        r_mmade_vals.append(np.nan)
+                        r_mmfde_vals.append(np.nan)
                     else:
+                        gt_multi_rel = root_relative_multigt(gt_multi, root_idx=root_idx)
                         mmade_i = float(compute_mmade(pred_b, gt_b, gt_multi))
                         mmfde_i = float(compute_mmfde(pred_b, gt_b, gt_multi))
+                        r_mmade_i = float(compute_mmade(pred_rel_b, gt_rel_b, gt_multi_rel))
+                        r_mmfde_i = float(compute_mmfde(pred_rel_b, gt_rel_b, gt_multi_rel))
                         mmade_vals.append(mmade_i)
                         mmfde_vals.append(mmfde_i)
+                        r_mmade_vals.append(r_mmade_i)
+                        r_mmfde_vals.append(r_mmfde_i)
                         mmade_running_sum += mmade_i
                         mmfde_running_sum += mmfde_i
+                        r_mmade_running_sum += r_mmade_i
+                        r_mmfde_running_sum += r_mmfde_i
                         mm_valid_count += 1
 
                 n_sequences += 1
-        except Exception:
+        except Exception as e:
+            failed_batches += 1
+            if first_error is None:
+                first_error = repr(e)
+                pbar.write(f"[WARN] Skipping batch after evaluation error: {first_error}")
+                if "out of memory" in first_error.lower() and device.type == "cuda":
+                    torch.cuda.empty_cache()
             continue
 
         postfix = {
             "ADE": f"{(ade_total / max(1, n_sequences)):.4f}",
             "FDE": f"{(fde_total / max(1, n_sequences)):.4f}",
+            "MMADE": "NaN",
+            "MMFDE": "NaN",
+            "R_ADE": f"{(r_ade_total / max(1, n_sequences)):.4f}",
+            "R_FDE": f"{(r_fde_total / max(1, n_sequences)):.4f}",
+            "R_MMADE": "NaN",
+            "R_MMFDE": "NaN",
         }
-        if nsample > 1:
-            if mm_valid_count > 0:
-                postfix["MMADE"] = f"{(mmade_running_sum / mm_valid_count):.4f}"
-                postfix["MMFDE"] = f"{(mmfde_running_sum / mm_valid_count):.4f}"
-            else:
-                postfix["MMADE"] = "NaN"
-                postfix["MMFDE"] = "NaN"
+        if nsample > 1 and mm_valid_count > 0:
+            postfix["MMADE"] = f"{(mmade_running_sum / mm_valid_count):.4f}"
+            postfix["MMFDE"] = f"{(mmfde_running_sum / mm_valid_count):.4f}"
+            postfix["R_MMADE"] = f"{(r_mmade_running_sum / mm_valid_count):.4f}"
+            postfix["R_MMFDE"] = f"{(r_mmfde_running_sum / mm_valid_count):.4f}"
         pbar.set_postfix(postfix)
 
     denom = max(1, n_sequences)
     mmade_avg = float(np.nanmean(mmade_vals)) if nsample > 1 and len(mmade_vals) > 0 else None
     mmfde_avg = float(np.nanmean(mmfde_vals)) if nsample > 1 and len(mmfde_vals) > 0 else None
+    r_mmade_avg = float(np.nanmean(r_mmade_vals)) if nsample > 1 and len(r_mmade_vals) > 0 else None
+    r_mmfde_avg = float(np.nanmean(r_mmfde_vals)) if nsample > 1 and len(r_mmfde_vals) > 0 else None
+
+    if failed_batches > 0:
+        print(f"[WARN] Skipped {failed_batches} evaluation batch(es). First error: {first_error}")
+    if n_sequences == 0:
+        raise RuntimeError(
+            "No evaluation sequences were processed successfully. "
+            f"First batch error: {first_error}"
+        )
 
     return {
         "AMPJPE": amp_total / denom,
@@ -360,12 +429,16 @@ def evaluate_with_multimodal_gt(model, dataloader, config, device, nsample, mult
         "FDE": fde_total / denom,
         "MMADE": mmade_avg,
         "MMFDE": mmfde_avg,
+        "R_ADE": r_ade_total / denom,
+        "R_FDE": r_fde_total / denom,
+        "R_MMADE": r_mmade_avg,
+        "R_MMFDE": r_mmfde_avg,
         "Diversity": diversity_total / denom,
     }
 
 # 讀 config
 
-def build_dataset(cfg, split):
+def build_dataset(cfg, split, data_ratio):
     """依 cfg['data']['dataset'] 回傳對應 Dataset 物件"""
     ds_name   = cfg['data'].get('dataset', 'h36m').lower()
     print(f"Building dataset: {ds_name} (split={split})")
@@ -396,7 +469,7 @@ def build_dataset(cfg, split):
             miss_type=cfg['data'].get('miss_type', 'no_miss'),
             miss_rate=cfg['data'].get('miss_rate', 0.2),
             all_data=cfg['data'].get('all_data', True),
-            data_ratio=cfg['data'].get('data_ratio', 1.0),
+            data_ratio=data_ratio,
             pad_short_sequences=cfg['data'].get('pad_short_sequences', False),
             **common_kw,
         ), joints * 3
@@ -418,6 +491,7 @@ def main():
     parser.add_argument("--config_s", type=str, default=None, help="Short-term model config for two-stage evaluation")
     parser.add_argument("--config_l", type=str, default=None, help="Long-term model config for two-stage evaluation")
     parser.add_argument("--two_stage_n1", type=int, default=None, help="Number of future frames generated by model_s before model_l")
+    parser.add_argument("--data_ratio", type=int, default=0.5)
     
     args = parser.parse_args()
 
@@ -485,7 +559,7 @@ def main():
     # Load Validation Dataset (Split 2 for Test partition)
     print("📂 Loading Dataset (Split 2)...")
 
-    val_dataset, _   = build_dataset(config, split=2)
+    val_dataset, _   = build_dataset(config, split=2, data_ratio=args.data_ratio)
     
 
     
@@ -504,6 +578,7 @@ def main():
     try:
         use_multigt = args.enable_multigt and isinstance(val_dataset, H36MUnified)
         if use_multigt:
+            print("RWRNUIIURNWIIURNVIUNVIOUIVW")
             threshold = args.multimodal_threshold
             if threshold is None:
                 threshold = config['data'].get('multimodal_threshold', 0.5)
@@ -517,6 +592,7 @@ def main():
                 multimodal_traj=multimodal_traj,
             )
         else:
+            print("25882950928509")
             metrics = evaluator.evaluate(
                 model=model,
                 dataloader=dataloader,

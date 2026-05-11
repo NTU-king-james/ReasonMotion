@@ -267,36 +267,42 @@ class ModelMain(nn.Module):
             sample    : 是否在每步加入隨機雜訊（True = 標準 DDPM）。
         """
         B, K, L = x0.shape
-        alpha_hat = torch.tensor(self.alpha_hat, device=self.device).float()
-        alpha = torch.tensor(self.alpha, device=self.device).float()
+        alpha_hat = torch.as_tensor(self.alpha_hat, device=self.device, dtype=x0.dtype)
+        alpha = torch.as_tensor(self.alpha, device=self.device, dtype=x0.dtype)
+        beta = torch.as_tensor(self.beta, device=self.device, dtype=x0.dtype)
 
-        outs = torch.zeros(B, n, K, L, device=self.device)
-        for s in range(n):
-            if noisy_data is not None:
-                if noisy_data.ndim == 4 and noisy_data.shape[1] == n:
-                    x_t = noisy_data[:, s].clone()
-                elif noisy_data.ndim == 3:
-                    x_t = noisy_data.clone()
-                else:
-                    x_t = torch.randn_like(x0)
-            else:
-                x_t = torch.randn_like(x0)
+        if noisy_data is not None and noisy_data.ndim == 4 and noisy_data.shape[1] == n:
+            x_t = noisy_data.to(device=self.device, dtype=x0.dtype).clone()
+        elif noisy_data is not None and noisy_data.ndim == 3:
+            x_t = noisy_data.to(device=self.device, dtype=x0.dtype).unsqueeze(1).expand(-1, n, -1, -1).clone()
+        else:
+            x_t = torch.randn(B, n, K, L, device=self.device, dtype=x0.dtype)
 
-            for t in reversed(range(self.num_steps)):
-                inp = self.set_input_to_diffmodel(x_t, x0, cond_mask)
-                t_vec = torch.full((B,), t, dtype=torch.long, device=self.device)
-                eps = self.diffmodel(inp, side, t_vec, text_emb=text_emb)
+        side_rep = side.repeat_interleave(n, dim=0)
+        cond_rep = cond_mask.repeat_interleave(n, dim=0)
+        obs_rep = x0.repeat_interleave(n, dim=0)
+        if isinstance(text_emb, tuple):
+            text_rep = tuple(u.repeat_interleave(n, dim=0) for u in text_emb)
+        else:
+            text_rep = text_emb.repeat_interleave(n, dim=0) if text_emb is not None else None
 
-                coeff1 = 1 / alpha_hat[t].sqrt()
-                coeff2 = (1 - alpha_hat[t]) / (1 - alpha[t]).sqrt()
-                x_t = coeff1 * (x_t - coeff2 * eps)
+        for t in reversed(range(self.num_steps)):
+            x_t_flat = x_t.reshape(B * n, K, L)
+            inp = self.set_input_to_diffmodel(x_t_flat, obs_rep, cond_rep)
+            t_vec = torch.full((B * n,), t, dtype=torch.long, device=self.device)
+            eps = self.diffmodel(inp, side_rep, t_vec, text_emb=text_rep)
 
-                if t > 0 and sample:
-                    sigma = math.sqrt((1 - alpha[t - 1]) / (1 - alpha[t]) * self.beta[t])
-                    x_t += sigma * torch.randn_like(x_t)
+            coeff1 = 1 / alpha_hat[t].sqrt()
+            coeff2 = (1 - alpha_hat[t]) / (1 - alpha[t]).sqrt()
+            x_t_flat = coeff1 * (x_t_flat - coeff2 * eps)
 
-            outs[:, s] = x_t * (1 - cond_mask) + x0 * cond_mask
-        return outs
+            if t > 0 and sample:
+                sigma = ((1 - alpha[t - 1]) / (1 - alpha[t]) * beta[t]).sqrt()
+                x_t_flat = x_t_flat + sigma * torch.randn_like(x_t_flat)
+
+            x_t = x_t_flat.reshape(B, n, K, L)
+
+        return x_t * (1 - cond_mask.unsqueeze(1)) + x0.unsqueeze(1) * cond_mask.unsqueeze(1)
 
     # ====================== GRPO / Trajectory ==========================
 
